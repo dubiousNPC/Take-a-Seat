@@ -396,7 +396,13 @@ local function findSeatSurface(chairPos, furniture, token, done)
             local diff = best.zMax - chairPos.z
             print(string.format("[sit] seat Z=%.1f pivot Z=%.1f diff=%.1f hits=%d clusters=%d",
                 best.zMax, chairPos.z, diff, #allZHits, #clusters))
-            print(string.format("[sit] TIP: if correct, add SIT_PIVOT_OFFSET["%s"] = %.1f to sitAnim_shared.lua",
+            -- Bracket quotes escaped. Unescaped, the literal ends at
+            -- `SIT_PIVOT_OFFSET[` and Lua reads the rest as `% s "..."` --
+            -- a modulo followed by a call to an undeclared global `s`. That
+            -- parses, so luacheck passes it, and it raises "attempt to call a
+            -- nil value (global 's')" the moment DEBUG is turned on: exactly
+            -- when someone is trying to read the tip this line prints.
+            print(string.format("[sit] TIP: if correct, add SIT_PIVOT_OFFSET[\"%s\"] = %.1f to sitAnim_shared.lua",
                 furniture.recordId or "?", diff))
         end
 
@@ -547,8 +553,13 @@ local CAMERA_TAG     = "TakeASeat"
 local installedRenderers = storage.playerSection("InstalledSettingsRenderers")
 
 local function sliderAvailable()
-    local ok, version = pcall(function() return installedRenderers:get("SuperSlider") end)
-    return ok and type(version) == "number" and version >= 6
+    -- No pcall. playerSection is available in this context and creates the
+    -- section on demand, and :get on an absent key returns nil -- which is the
+    -- case being tested for anyway. Wrapping it would only hide a real error
+    -- from a future storage change behind the same nil the absent-renderer
+    -- path already produces.
+    local version = installedRenderers:get("SuperSlider")
+    return type(version) == "number" and version >= 6
 end
 
 local HAS_SLIDER = sliderAvailable()
