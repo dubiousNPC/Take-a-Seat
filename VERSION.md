@@ -1,141 +1,136 @@
-# Take a Seat v0.20
+# Take a Seat v0.21
 
 Sit on furniture. Raycast-resolved seat surface, per-record pivot offsets, and a
 settling camera — with no `onFrame` handler anywhere.
 
 ---
 
-## Two bugs fixed in this version
-
-### 1. Female characters could not sit — no animation at all
-
-`animations/xbase_anim_female/` **did not exist**. The other three skeleton
-folders were present and each declared the same 31 groups; the female one was
-simply absent.
-
-OpenMW resolves additional animation sources **per skeleton**: a female actor
-uses `xbase_anim_female.nif` and therefore looks in
-`animations/xbase_anim_female/`. There is no fallback to `animations/xbase_anim/`.
-So every one of the six groups this mod plays was unavailable to female
-characters — and `playBlended` on a group the skeleton does not define is a
-**silent no-op**, so the seat resolved, the camera settled, the state machine
-advanced, and the character never changed pose.
-
-Fixed by shipping the three `.kf` files in the female folder too. The clips are
-skeleton-compatible, which is why the other mods in this suite ship the same
-file in all four folders.
+## The mod did nothing. Here is why.
 
 ```
-  ABSENT    xbase_anim_female    no such folder      <- before
-  ok        xbase_anim_female    3 file(s), 31 group(s)   <- after
+[17:45:15 E] Can't start L@0x1[scripts/take_a_seat/take_a_seat.lua];
+             Lua error: [scripts/take_a_seat/sitanim_shared.lua]:66:
+             table index is nil
 ```
 
-### 2. A debug line that crashes the moment you enable debugging
-
-`take_a_seat.lua:399` had an **unescaped quote** inside a string literal:
+`sitAnim_shared.lua` declared six seat types and then keyed a seventh:
 
 ```lua
-print(string.format("[sit] TIP: if correct, add SIT_PIVOT_OFFSET["%s"] = %.1f to sitAnim_shared.lua",
+local SEAT_TYPE = { BACKED_CHAIR=..., BENCH=..., STOOL=...,
+                    BARSTOOL=..., SINGLE_SEAT_BENCH=..., CUSHION=... }
+local T = SEAT_TYPE
+
+local SEAT_ANIM = {
+    ...
+    [T.THRONE] = "dbssit8",     -- THRONE was never defined
+}
 ```
 
-The literal ends at `SIT_PIVOT_OFFSET[`. Lua then reads `% s "..."` as a modulo
-followed by a **call to an undeclared global `s`** — which is valid syntax, so
-it parses cleanly and `luacheck` passes it. It raises at runtime:
+`T.THRONE` is `nil`, and `[nil] = "dbssit8"` inside a table constructor raises
+**while the chunk is still loading**. The module never returned, so
+`take_a_seat.lua` could not start, so nothing was listening for activation.
+The global script loaded fine and logged cheerfully — which is why the log looks
+almost normal.
 
-```
-attempt to call a nil value (global 's')
-```
+`THRONE` was referenced **twice**: as that key, and in the pattern rules at line
+233 (`{ seat = T.THRONE, patterns = { "throne" } }`). The second would have
+failed more quietly still, classifying every throne as seat type `nil`. So the
+type was missing, not the entry — `THRONE = "throne"` is now defined and both
+uses work. `dbssit8` is a real group present in all four skeletons.
 
-`DEBUG` is `false`, so it is latent — but the branch it sits in exists purely to
-print the tip telling you what `SIT_PIVOT_OFFSET` value to add for a new chair.
-It would fire the first time anyone turned debugging on to tune a pivot, which
-is the one moment it is guaranteed to be in the way.
-
-Quotes escaped, with the reason recorded at the call site.
-
-Worth noting which tool caught it: **`check_names.py`, and only that one.**
-`luacheck` passes because it parses; `globalcheck.py` missed it because `s`
-appears in a *call* position rather than an index, and its candidate pattern is
-tuned for reads (RESEARCH §4.4).
+A stale comment claiming "throne is a backed chair" contradicted both uses and
+has been corrected.
 
 ---
 
-## One removal
+## This was in v0.20, and my checks missed it
 
-`sliderAvailable()` wrapped `installedRenderers:get("SuperSlider")` in a
-`pcall`. `storage.playerSection` is available in this context and creates the
-section on demand, and `:get` on an absent key returns `nil` — which is exactly
-the case being tested for. The wrap could only ever hide a genuine storage error
-behind the same `nil` the absent-renderer path already produces (RESEARCH §2.4).
+Worth stating plainly, because the interesting part is not the typo.
 
-**The mod's own scripts now contain zero `pcall`s.** The two remaining in the
-package are the subscriber-callback isolation in `AnimRefresh_v2.lua` and
-`SharedRay_v2.lua` — third-party callback boundaries, the justified case
-(RESEARCH §2.3).
+The bug shipped past **six** checkers — syntax, undeclared globals, undefined
+names, an API sweep against Cod3x 0.4, a context check and a manifest check.
+Not one of them caught it, for one reason:
+
+> **Not one of them ever RAN the file.**
+
+`luacheck` proves a file *parses*. `[nil] = x` parses perfectly. It is a runtime
+error at chunk level, and the only way to see it is to execute the chunk.
+
+`check_anims.py` made it worse rather than better. It reported `dbssit8` as
+`ok` — because I passed the group list on the command line by hand. It validated
+a list I typed rather than the list the code defines, so it confirmed the
+animation existed while the code that names it was dead. That is RESEARCH §4.1's
+"a mock that accepts everything tests nothing", wearing a different hat: a
+checker fed by hand instead of by the artifact.
+
+### `check_load.py` is the answer
+
+New tool. It loads every module with `openmw.*` and `openmw_aux.*` stubbed and
+reports anything that raises at chunk level — table constructors, concatenation
+on a nil, a missing project-local require, any top-level call.
+
+```
+  LOAD    scripts/take_a_seat/sitAnim_shared.lua
+            sitAnim_shared.lua:66: table index is nil
+  LOAD    scripts/take_a_seat/take_a_seat.lua
+            sitAnim_shared.lua:66: table index is nil
+```
+
+Same file, same line number as the engine.
+
+Building it took three passes, and each correction is a rule in its own right:
+
+- **The stub must be comparable.** `I.AnimRefresh.version >= MY_VERSION`
+  compares a number against the stub. Without `__lt`/`__le`, every bundled
+  shared library reported a false failure — and a checker that cries wolf gets
+  switched off (RESEARCH §4.4).
+- **The stub must return `nil` for numeric keys.** `sitAnim_shared.lua:285`
+  runs `for _, file in ipairs(core.contentFiles.list)` at chunk level. With a
+  stub that answers every index, `ipairs` never runs out and the checker hangs
+  forever. A checker that hangs is worse than one that misses.
+- **Project-local requires must resolve for real**, or a load error *inside*
+  `sitAnim_shared` hides behind a require failure in `take_a_seat`.
+
+It stubs generously on purpose: a clean result does not prove a module is
+correct, but a **failure is always real**.
 
 ---
 
 ## Verification
 
-Cod3x 0.4. Everything below run against this package.
+Cod3x 0.4. Everything run against this package.
 
 | Check | Result |
 |---|---|
 | `luacheck.py` — syntax | 5 files, **0 failures** |
+| `check_load.py` — **chunk executes** | 5 files, **0 failures** (was 2) |
 | `globalcheck.py` — undeclared globals | **0** |
-| `check_names.py` — undefined names, unused requires | **clean** (was 1 finding — see above) |
+| `check_names.py` — undefined names, unused requires | **clean** |
 | `api_sweep.py` — every `module.member` vs Cod3x 0.4 | **nothing unrecognised** |
 | `ctxcheck.py` — `---@omw-context` vs the 0.4 policy | 5 files, **0 issues** |
 | `check_manifest.py` — one path, one flag set | **0 mismatches** |
-| `check_anims.py` — groups played vs groups shipped | **0 unplayable** (was 6) |
+| `check_anims.py` — groups played vs groups shipped | **0 unplayable** |
 | `pcall` in `scripts/take_a_seat/` | **none** |
 
-### `check_anims.py` is new
-
-Written for this review, and it is the analogue of `check_bones.py` for IED.
-Nothing else in the toolchain opens a `.kf`, so nothing else could see that six
-groups were unplayable for half of all characters.
-
-It reads text keys out of every shipped `.kf` — OpenMW takes the group name from
-the part before the colon, so `dbssit4: start` declares group `dbssit4` — and
-cross-references them against the group-name literals in the Lua. It reports
-**per-skeleton-folder** coverage rather than a single union, because the usual
-failure is not a typo but a skeleton variant nobody made files for.
-
-```
-python3 tools/check_anims.py . --groups "dbssit4,dbssit5,dbssit6,dbssit8,dbssitting24,rasit6"
-```
-
-### Tools that were missing
-
-`tools/` did not exist. All the checkers above are now included.
-
 ---
 
-## What is already right, and worth not regressing
+## Carried over from v0.20
 
-- **No `onFrame`, anywhere.** Every path is entered from a discrete event:
-  activation, an `addAnimationEndedHandler` callback, an
-  `async:newUnsavableSimulationTimer` for the camera settle, and
-  `time.runRepeatedly` at 1 s for fatigue regen. The header says so and the code
-  matches it.
-- **`time.runRepeatedly` is started at init**, not on sit — it stops evaluating
-  across a save load otherwise, and the comment says why.
-- **`SharedRay_v2` and `AnimRefresh_v2` are bundled and version-guarded**, so
-  only the newest loaded copy runs.
-- **`MOD_ANIM_DATABASE` is an empty commented template**, not a live table with
-  a placeholder id in it. The `yourpack_sit_floor_01` name is inside a comment
-  and is correctly ignored by the group check.
+- **Female characters can sit.** `animations/xbase_anim_female/` did not exist;
+  OpenMW resolves animation sources per skeleton with no fallback, so all six
+  groups were unavailable to female characters and `playBlended` on an undefined
+  group is a silent no-op. The three `.kf` files now ship in all four folders.
+- **The debug tip line no longer crashes.** An unescaped quote made Lua read
+  `% s "..."` as a call to an undeclared global `s` — valid syntax, so it parsed,
+  and it raised the moment `DEBUG` was turned on. Which is the one moment it was
+  guaranteed to be in the way, since that branch exists to print the tip you
+  turn debugging on to read.
+- **Zero `pcall`s in the mod's own scripts.** The two in the package are the
+  subscriber-callback isolation in `AnimRefresh_v2` and `SharedRay_v2` — the
+  justified third-party-boundary case.
 
----
+## Still not addressed
 
-## Not addressed
-
-- **No `README.md`, `LICENSE` or `l10n/`.** The settings page builds its labels
-  from literal strings rather than l10n keys, which is self-consistent — there
-  is no `l10n` context declared on the group — so this is a packaging gap rather
-  than a bug.
-- The `.1st` folder names two of its three files `*.1st.kf` and one plain
-  `xSitting2.kf`. Filenames do not affect group resolution — OpenMW scans every
-  `.kf` in the folder — so this is cosmetic, but the inconsistency is the kind
-  of thing that later reads as significant.
+No `README.md` or `l10n/`. The settings page builds labels from literal strings
+with no `l10n` context declared on the group, so that is self-consistent — a
+packaging gap rather than a bug.

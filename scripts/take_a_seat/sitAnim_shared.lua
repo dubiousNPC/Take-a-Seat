@@ -47,6 +47,14 @@ local SEAT_TYPE = {
     BARSTOOL          = "barstool",
     SINGLE_SEAT_BENCH = "single_seat_bench",
     CUSHION           = "cushion",
+    -- THRONE was referenced twice and defined nowhere: once as a SEAT_ANIM key
+    -- and once in the pattern rules. The SEAT_ANIM use is a table constructor,
+    -- so `[nil] = "dbssit8"` raised "table index is nil" while the chunk was
+    -- still loading -- OpenMW logged `Can't start L@0x1[take_a_seat.lua]` and
+    -- the entire mod was inert with no other symptom. The pattern rule would
+    -- have failed more quietly still, classifying every throne as seat type
+    -- nil. Defining the type fixes both.
+    THRONE            = "throne",
 }
 local T = SEAT_TYPE
 
@@ -209,7 +217,8 @@ local MOD_SEAT_DATABASE = {
 -- ---------------------------------------------------------------------------
 -- For furniture nobody has profiled. ORDER IS SIGNIFICANT: these substrings
 -- nest, so the most specific type must be tested first -- "barstool" contains
--- "stool", and "throne" is a backed chair. First match wins.
+-- "stool". "throne" has its own seat type and its own animation. First
+-- match wins.
 --
 -- CUSHION has no patterns on purpose: "cushion" as a substring would also
 -- catch OAAB's cushioned CHAIR, and the point of exact IDs is that they cannot
