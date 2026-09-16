@@ -1,0 +1,8 @@
+# Bed calibration profiles for ProceduralChatter
+# Format: recordId <tab> zOffset <tab> xOffset <tab> yOffset <tab> slotCount
+# Multiple rows for the same recordId = multiple slots (e.g. bunk beds).
+# When offsets are present, the normal BED_Z_OFFSET is skipped.
+#
+# NOTE: active_de_p_bed_09 and other bunk beds are now covered by SDP profiles.
+# This file is intentionally empty; add local overrides only when an ID is
+# missing from data/furniture_profiles/sdp/bedProfiles.txt.

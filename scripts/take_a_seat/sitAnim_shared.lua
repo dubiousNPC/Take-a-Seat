@@ -55,6 +55,11 @@ local SEAT_TYPE = {
     -- have failed more quietly still, classifying every throne as seat type
     -- nil. Defining the type fixes both.
     THRONE            = "throne",
+    -- BATH was the same fault as THRONE, one release later: referenced by
+    -- SEAT_ANIM and by three pattern rules, defined nowhere. `[T.BATH] = ...`
+    -- in a table constructor raised "table index is nil" while the chunk was
+    -- loading, so take_a_seat.lua could not start and the mod was inert again.
+    BATH              = "bath",
 }
 local T = SEAT_TYPE
 
@@ -64,15 +69,201 @@ local T = SEAT_TYPE
 -- One group per seat type. Every group needs matching start/stop text keys or
 -- playBlended silently does nothing.
 
-local SEAT_ANIM = {
-    [T.BACKED_CHAIR]      = "dbssit5",
-    [T.BENCH]             = "dbssit4",
-    [T.STOOL]             = "dbssitting24",
-    [T.BARSTOOL]          = "dbssit6",
-    [T.SINGLE_SEAT_BENCH] = "dbssit4",
-    [T.CUSHION]           = "rasit6",
-    [T.THRONE]            = "dbssit8",
+-- KEYED BY THE SEAT-TYPE NAME, not by `[T.X]`. Twice now a table written as
+-- `[T.SOMETHING] = "anim"` has referenced a type that was never defined:
+-- `T.SOMETHING` is nil, `[nil] = v` raises inside the constructor, and the
+-- whole mod fails to load with one cryptic line and no other symptom.
+--
+-- A string key cannot do that. The validation loop below then reports the
+-- offender BY NAME, at load, instead of the engine reporting a nil index.
+local SEAT_ANIM_BY_NAME = {
+    BACKED_CHAIR      = "dbssit5",
+    BENCH             = "dbssit4",
+    STOOL             = "dbssitting24",
+    BARSTOOL          = "dbssit6",
+    SINGLE_SEAT_BENCH = "dbssit4",
+    CUSHION           = "rasit6",
+    THRONE            = "dbssit8",
+    BATH              = "dbssit2",
 }
+
+---Resolve a name-keyed table to a seat-type-keyed one, naming anything unknown.
+---@param byName table<string, any>
+---@param label string
+local function resolveByType(byName, label)
+    local out = {}
+    for name, value in pairs(byName) do
+        local seatType = SEAT_TYPE[name]
+        if not seatType then
+            error(("[take a seat] %s references unknown seat type '%s' -- " ..
+                   "add it to SEAT_TYPE or remove the row"):format(label, name))
+        end
+        out[seatType] = value
+    end
+    return out
+end
+
+local SEAT_ANIM = resolveByType(SEAT_ANIM_BY_NAME, "SEAT_ANIM")
+
+-- ---------------------------------------------------------------------------
+-- ENTER / EXIT ONE-SHOTS
+-- ---------------------------------------------------------------------------
+-- Short animations played BEFORE the sitting idle begins and AFTER it ends.
+-- Entirely optional, per seat type and per direction: a type with no entry
+-- here simply cuts straight to the idle, which is what every seat did before
+-- and remains the default for all of them.
+--
+-- These are one-shots, so `loops = 0` and they must NOT hold a priority that
+-- outlives them -- see ANIM_PROFILE below for why enter/exit and the idle use
+-- different masks.
+--
+-- Groups named here are not shipped. Playing a group the skeleton does not
+-- define is a silent no-op, so an unshipped name costs nothing and the table
+-- stays a declaration of intent until someone authors the clips.
+
+local SEAT_ENTER_ANIM = resolveByType({
+    -- BACKED_CHAIR = "dbssit5_enter",
+    -- THRONE       = "dbssit8_enter",
+}, "SEAT_ENTER_ANIM")
+
+local SEAT_EXIT_ANIM = resolveByType({
+    -- BACKED_CHAIR = "dbssit5_exit",
+    -- THRONE       = "dbssit8_exit",
+}, "SEAT_EXIT_ANIM")
+
+-- ---------------------------------------------------------------------------
+-- TARGET KINDS AND PRIORITY PROFILES
+-- ---------------------------------------------------------------------------
+-- Seats, beds and miscellaneous props are three different animation problems
+-- and had been sharing one PRIORITY.Scripted constant.
+--
+-- PRIORITY.Scripted pauses EVERY non-Scripted animation on the actor, globally
+-- and not per bone group. For a full-body sitting or sleeping idle that is
+-- correct and deliberate -- the walk cycle must stop. For a short one-shot it
+-- is wrong: it freezes movement for the length of the clip, and RESEARCH 3.2
+-- names it as the mistake to avoid for gestures.
+--
+-- So the idle and the enter/exit one-shots get different profiles, and each
+-- target kind gets its own so a bed pose can be tuned without touching chairs.
+--
+-- blendMask takes BLEND_MASK (a bitmask 1/2/4/8), never BONE_GROUP (an index
+-- 1/2/3/4). Summing the wrong enum yields a valid, meaningless mask.
+
+local TARGET_KIND = {
+    SEAT = "seat",
+    BED  = "bed",
+    MISC = "misc",
+}
+
+---@param anim any the openmw.animation module, passed in so this file requires nothing
+---@return table<string, table> profiles keyed by TARGET_KIND
+local function buildAnimProfiles(anim)
+    local P, B = anim.PRIORITY, anim.BLEND_MASK
+    return {
+        [TARGET_KIND.SEAT] = {
+            -- Whole body, and everything else held still.
+            idle  = { priority = P.Scripted, blendMask = B.All, loops = 0 },
+            -- Upper body at weapon priority: the legs keep their own animation
+            -- during the reach-and-settle, and nothing is frozen if the clip is
+            -- missing or cut short.
+            enter = { priority = P.Weapon, blendMask = B.UpperBody, loops = 0 },
+            exit  = { priority = P.Weapon, blendMask = B.UpperBody, loops = 0 },
+        },
+        [TARGET_KIND.BED] = {
+            idle  = { priority = P.Scripted, blendMask = B.All, loops = 0 },
+            -- Lying down is a whole-body move; an upper-body mask would leave
+            -- the legs standing. Scripted is right here and the one-shot is
+            -- short enough that freezing movement is the intended effect.
+            enter = { priority = P.Scripted, blendMask = B.All, loops = 0 },
+            exit  = { priority = P.Scripted, blendMask = B.All, loops = 0 },
+        },
+        [TARGET_KIND.MISC] = {
+            -- Props are leaning, kneeling, resting a hand -- the player should
+            -- stay in control, so nothing here uses Scripted.
+            idle  = { priority = P.Weapon, blendMask = B.UpperBody, loops = 0 },
+            enter = { priority = P.Weapon, blendMask = B.UpperBody, loops = 0 },
+            exit  = { priority = P.Weapon, blendMask = B.UpperBody, loops = 0 },
+        },
+    }
+end
+
+-- ---------------------------------------------------------------------------
+-- BEDS
+-- ---------------------------------------------------------------------------
+-- Separate from seats throughout: a different type set, a different animation
+-- table, a different priority profile, and placement driven by the sleep-root
+-- offset and pose yaw the SDP bed profiles carry rather than by a seat plane.
+
+local BED_TYPE = {
+    SINGLE   = "single",
+    DOUBLE   = "double",
+    BUNK     = "bunk",
+    BEDROLL  = "bedroll",
+    HAMMOCK  = "hammock",
+}
+
+local function resolveBedByName(byName, label)
+    local out = {}
+    for name, value in pairs(byName) do
+        local bedType = BED_TYPE[name]
+        if not bedType then
+            error(("[take a seat] %s references unknown bed type '%s'")
+                  :format(label, name))
+        end
+        out[bedType] = value
+    end
+    return out
+end
+
+-- `slee8` is the group the SDP animation-normalization table calibrates for
+-- sleeping, with a global vertical lift to keep an actor out of the mattress.
+-- None of these are shipped by this mod; an absent group is a silent no-op.
+local BED_ANIM = resolveBedByName({
+    SINGLE  = "slee8",
+    DOUBLE  = "slee8",
+    BUNK    = "slee8",
+    BEDROLL = "slee8",
+    HAMMOCK = "slee8",
+}, "BED_ANIM")
+
+local BED_ENTER_ANIM = resolveBedByName({}, "BED_ENTER_ANIM")
+local BED_EXIT_ANIM  = resolveBedByName({}, "BED_EXIT_ANIM")
+
+-- BEDS ARE OFF UNTIL THE CLIPS EXIST.
+--
+-- This mod ships no sleeping animation. `slee8` is the group SDP's
+-- normalization table calibrates, and it is absent from all four skeleton
+-- folders here -- tools/check_anims.py reports it. Playing a group the
+-- skeleton does not define is a SILENT no-op, so leaving beds enabled would
+-- teleport the player onto a mattress and leave them standing in it, with no
+-- error and nothing in the log.
+--
+-- That is worse than not supporting beds, so `isBed` returns false while this
+-- is false and every bed record falls through to the existing seat path. Flip
+-- it once a sleeping clip ships and check_anims.py reports slee8 present.
+local BEDS_ENABLED = false
+
+-- ---------------------------------------------------------------------------
+-- MISCELLANEOUS ITEMS -- STUB
+-- ---------------------------------------------------------------------------
+-- Reserved for props that are neither seat nor bed: leaning on a railing,
+-- kneeling at a shrine, resting against a crate. Deliberately empty.
+--
+-- The tables and the accessors exist so the rest of the mod can be written
+-- against a complete shape now, and so adding the first prop is a data change
+-- rather than a structural one. Everything below returns nil for every record
+-- until a row is added, and `isMiscItem` is false for everything, so no code
+-- path changes behaviour by this section existing.
+
+local MISC_TYPE = {
+    -- LEAN_RAIL = "lean_rail",
+    -- KNEEL     = "kneel",
+}
+
+local MISC_ANIM       = {}   -- [MISC_TYPE.X] = "groupname"
+local MISC_ENTER_ANIM = {}
+local MISC_EXIT_ANIM  = {}
+local MISC_ITEMS      = {}   -- [recordId] = MISC_TYPE.X
 
 -- Per-plugin animation overrides, merged only when the plugin is loaded.
 -- Same shape as SEAT_ANIM. Use for animation packs that ship their own groups.
@@ -209,6 +400,13 @@ local MOD_SEAT_DATABASE = {
         ["ab_furn_demidbench"]           = T.BENCH,
         ["ab_furn_deplnbench04"]         = T.BENCH,
         ["ab_furn_demidstool"]           = T.BARSTOOL,  -- named stool, poses as a barstool
+    },
+
+    ["bov.esm"] = {
+        ["s3_saunabench_01"]             = T.BENCH,
+        ["S3_bath_02"]                   = T.BATH,
+        ["S3_bath_01gr"]                 = T.BATH,
+        ["S3_bath_03"]                   = T.BATH,
     },
 }
 
@@ -357,10 +555,131 @@ local function fallbackOffset(recordId)
     return SIT_PIVOT_OFFSET_FALLBACK.default
 end
 
+-- ---------------------------------------------------------------------------
+-- GENERATED PROFILES
+-- ---------------------------------------------------------------------------
+-- Merged UNDER the hand-authored tables: an entry written above always wins.
+-- The generated set is broader (32 calibrated seats, 38 beds) but it is
+-- somebody else's calibration, so it fills gaps rather than overriding
+-- decisions made here.
+
+local profiles = require('scripts.take_a_seat.furniture_profiles')
+
+for recordId, seatType in pairs(profiles.SEATS) do
+    if seatsByRecord[recordId] == nil then
+        seatsByRecord[recordId] = seatType
+    end
+end
+
+for recordId, z in pairs(profiles.PIVOTS) do
+    if SIT_PIVOT_OFFSET[recordId] == nil then
+        SIT_PIVOT_OFFSET[recordId] = z
+    end
+end
+
+local bedsByRecord = {}
+for recordId, bed in pairs(profiles.BEDS) do
+    bedsByRecord[recordId] = {
+        type = BED_TYPE[bed.type] or BED_TYPE.SINGLE,
+        z    = bed.z,
+        yaw  = bed.yaw,
+    }
+end
+
+-- ---------------------------------------------------------------------------
+-- ACCESSORS
+-- ---------------------------------------------------------------------------
+
+---@return string|nil bedType
+local function getBedType(recordId)
+    if type(recordId) ~= 'string' then return nil end
+    local bed = bedsByRecord[recordId:lower()]
+    return bed and bed.type or nil
+end
+
+local function isBed(recordId)
+    if not BEDS_ENABLED then return false end
+    return getBedType(recordId) ~= nil
+end
+
+---Placement for a bed record: sleep-root vertical offset and pose yaw.
+local function bedPlacement(recordId)
+    if type(recordId) ~= 'string' then return nil end
+    return bedsByRecord[recordId:lower()]
+end
+
+local function getMiscType(recordId)
+    if type(recordId) ~= 'string' then return nil end
+    return MISC_ITEMS[recordId:lower()]
+end
+
+local function isMiscItem(recordId)
+    return getMiscType(recordId) ~= nil
+end
+
+---Which of the three animation problems a record is. Seats are checked last so
+---a record appearing in more than one table resolves to the more specific kind.
+---@return string|nil kind, string|nil subType
+local function classify(recordId)
+    local misc = getMiscType(recordId)
+    if misc then return TARGET_KIND.MISC, misc end
+    if BEDS_ENABLED then
+        local bed = getBedType(recordId)
+        if bed then return TARGET_KIND.BED, bed end
+    end
+    local seat = getSeatType(recordId)
+    if seat then return TARGET_KIND.SEAT, seat end
+    return nil, nil
+end
+
+---Idle animation group for any target kind.
+local function idleAnimFor(kind, subType)
+    if kind == TARGET_KIND.BED then return BED_ANIM[subType] end
+    if kind == TARGET_KIND.MISC then return MISC_ANIM[subType] end
+    return seatAnim[subType]
+end
+
+---One-shot played before the idle. nil means "cut straight to the idle", which
+---is the case for every shipped type -- enter/exit clips are optional by
+---design and no seat requires one.
+local function enterAnimFor(kind, subType)
+    if kind == TARGET_KIND.BED then return BED_ENTER_ANIM[subType] end
+    if kind == TARGET_KIND.MISC then return MISC_ENTER_ANIM[subType] end
+    return SEAT_ENTER_ANIM[subType]
+end
+
+---One-shot played after the idle ends. nil means stand straight up.
+local function exitAnimFor(kind, subType)
+    if kind == TARGET_KIND.BED then return BED_EXIT_ANIM[subType] end
+    if kind == TARGET_KIND.MISC then return MISC_EXIT_ANIM[subType] end
+    return SEAT_EXIT_ANIM[subType]
+end
+
 return {
     SEAT_TYPE                = SEAT_TYPE,
     SEAT_ANIM                = seatAnim,
     SEATS                    = seatsByRecord,
+
+    TARGET_KIND              = TARGET_KIND,
+    buildAnimProfiles        = buildAnimProfiles,
+
+    BED_TYPE                 = BED_TYPE,
+    BEDS_ENABLED             = BEDS_ENABLED,
+    BED_ANIM                 = BED_ANIM,
+    BEDS                     = bedsByRecord,
+    getBedType               = getBedType,
+    isBed                    = isBed,
+    bedPlacement             = bedPlacement,
+
+    MISC_TYPE                = MISC_TYPE,
+    MISC_ITEMS               = MISC_ITEMS,
+    getMiscType              = getMiscType,
+    isMiscItem               = isMiscItem,
+
+    classify                 = classify,
+    idleAnimFor              = idleAnimFor,
+    enterAnimFor             = enterAnimFor,
+    exitAnimFor              = exitAnimFor,
     SEAT_TYPE_PATTERNS       = SEAT_TYPE_PATTERNS,
     BLACKLIST                = BLACKLIST,
     SIT_PIVOT_OFFSET         = SIT_PIVOT_OFFSET,

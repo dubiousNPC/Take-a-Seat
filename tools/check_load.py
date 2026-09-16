@@ -37,6 +37,7 @@ LIB = '/usr/lib/x86_64-linux-gnu/liblua5.4.so.0'
 
 HARNESS = r'''
 local files = FILES
+local presetGlobals = PRESET
 
 local stub
 stub = setmetatable({}, {
@@ -56,10 +57,28 @@ stub = setmetatable({}, {
     -- (`I.AnimRefresh.version >= MY_VERSION`). Without these the comparison
     -- raises and every bundled shared library reports a false LOAD failure --
     -- and a checker that cries wolf gets switched off (RESEARCH 4.4).
+    -- Chunk-level layout maths on an engine constant (`constants.x * 2` in a
+    -- vendored UI renderer) must not report as a failure: the engine supplies
+    -- a number there. Arithmetic yields 0 so the expression completes.
+    __add      = function() return 0 end,
+    __sub      = function() return 0 end,
+    __mul      = function() return 0 end,
+    __div      = function() return 0 end,
+    __mod      = function() return 0 end,
+    __unm      = function() return 0 end,
     __lt       = function() return false end,
     __le       = function() return false end,
     __eq       = function() return false end,
 })
+
+-- A framework that injects its environment as globals and then require()s its
+-- modules (Sun's Dusk) leaves those names undefined here, so every module
+-- reports a false failure on the first one it touches. Predefine them as the
+-- stub -- a preset naming exactly what the host provides, not a blanket
+-- suppression (RESEARCH 4.10). Anything NOT in the preset still reports.
+for _, name in ipairs(presetGlobals) do
+    if _G[name] == nil then _G[name] = stub end
+end
 
 -- Project-local requires must resolve for real: `scripts.take_a_seat.x` is a
 -- path relative to the mod root, and reporting it as missing would hide the
@@ -69,8 +88,13 @@ package.path = ROOTS .. ";" .. package.path
 -- Resolve the engine's modules to the stub. Anything else is left alone, so a
 -- genuinely missing project-local require still reports.
 setmetatable(package.preload, { __index = function(_, name)
+    -- scripts.omw.* are OpenMW's own bundled game scripts, not project files.
+    -- They resolve at runtime and cannot resolve here, so they stub like the
+    -- rest of the engine -- otherwise every mod that uses mwui reports a false
+    -- load failure.
     if type(name) == "string"
-       and (name:match("^openmw%.") or name:match("^openmw_aux%.")) then
+       and (name:match("^openmw%.") or name:match("^openmw_aux%.")
+            or name:match("^scripts%.omw%.")) then
         return function() return stub end
     end
 end })
@@ -98,7 +122,7 @@ FAILED = fails
 '''
 
 
-def run(files):
+def run(files, preset=()):
     lua = ctypes.CDLL(LIB)
     lua.luaL_newstate.restype = ctypes.c_void_p
     lua.luaL_openlibs.argtypes = [ctypes.c_void_p]
@@ -117,12 +141,14 @@ def run(files):
     lua.lua_close.argtypes = [ctypes.c_void_p]
 
     listing = '{' + ','.join('[[%s]]' % f for f in files) + '}'
+    preset_lua = '{' + ','.join('[[%s]]' % n for n in preset) + '}'
     # A mod root is the directory containing `scripts/`, so a require of
     # `scripts.foo.bar` resolves the same way the engine resolves it.
     roots = sorted({f.split(os.sep + 'scripts' + os.sep)[0]
                     for f in files if os.sep + 'scripts' + os.sep in f})
     path = ';'.join(os.path.join(r, '?.lua') for r in roots) or '?.lua'
     src = (HARNESS.replace('FILES', listing)
+                  .replace('PRESET', preset_lua)
                   .replace('ROOTS', '[[%s]]' % path)).encode()
 
     L = lua.luaL_newstate()
@@ -140,6 +166,45 @@ def run(files):
 
 
 def main(argv):
+    # Chunk-level code that feeds an engine value into the string library
+    # (`("x"):gmatch(constants.something)`) cannot be stubbed generically --
+    # Lua's string functions take a real string and will not coerce a table.
+    # That is a limit of this approach, not a bug in the file, so such files are
+    # skipped BY NAME rather than papered over with a looser stub that would
+    # start missing real failures.
+    # Same list globalcheck.py uses, for the same reason.
+    PRESETS = {
+        'sunsdusk': (
+            'core types util world I animation ambient camera input nearby '
+            'storage vfs async self MODNAME saveData log makeButton '
+            'typesActorInventorySelf typesActorSpellsSelf '
+            'G_eventHandlers G_onFrameJobs G_onFrameJobsSluggish G_onLoadJobs '
+            'G_onSaveJobs G_UiModeChangedJobs G_settingsChangedJobs '
+            'G_perMinuteJobs G_onConsumeJobs G_onInventoryChangedJobs '
+            'G_removeAbilitiesJobs G_globalSettingDefaults'
+        ).split(),
+    }
+    preset = []
+
+    skip = []
+    args = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == '--preset' and i + 1 < len(argv):
+            name = argv[i + 1].strip().lower()
+            if name not in PRESETS:
+                print('unknown preset %r; have: %s' % (name, ', '.join(sorted(PRESETS))))
+                return 2
+            preset += PRESETS[name]
+            i += 2
+        elif argv[i] == '--skip' and i + 1 < len(argv):
+            skip += [x.strip() for x in argv[i + 1].split(',') if x.strip()]
+            i += 2
+        else:
+            args.append(argv[i])
+            i += 1
+    argv = args
+
     files = []
     for a in argv or ['.']:
         if os.path.isdir(a):
@@ -148,10 +213,12 @@ def main(argv):
         else:
             files.append(a)
     files = [f for f in files if os.sep + 'tools' + os.sep not in f]
+    for pat in skip:
+        files = [f for f in files if pat not in f.replace(os.sep, '/')]
     if not files:
         print('no .lua files')
         return 0
-    return 1 if run(files) else 0
+    return 1 if run(files, preset) else 0
 
 
 if __name__ == '__main__':

@@ -1,0 +1,45 @@
+RecordID	Model	ProfileID	BedType	SleepRootLocalOffset	SleepRootZOffset	SleepPoseYawDeg	SleepInwardOffsetFromApproach	SleepSurfaceGrid	SleepSurfaceCenterMode	SleepSurfaceMinHeight	SleepSurfaceMaxHeight	Slots	Flags
+active_de_p_bed_11	meshes/f/active_de_bed_11.nif	active_de_p_bed_11	single	40,-78,8	-180	-90	0	300,340,85	sample_extents	80	280	sleep_main|0,0,0||40,-78,8
+active_de_p_bed_09	meshes/f/active_de_bed_09.nif	active_de_p_bed_09	bottom_bunk	-0.222,-27.556,10	-180	-90	0		sample_extents	80	280	sleep_main|0,0,0||29.778,82.444,10
+sky_act_com_bunk_01	meshes/sky/f/sky_act_com_bunk_01.nif	sky_act_com_bunk_01	bunk	7.783,-41.975,-40	-180	-90	0		sample_extents	80	280	sleep_bottom|0,0,0||7.783,-41.975,-40;sleep_top|0,0,0||7.783,-41.975,40
+active_de_p_bed_10	meshes/f/active_de_bed_10.nif	active_de_p_bed_10	single	-0.222,-27.556,10	-180	-90	0		sample_extents	80	280	sleep_main|0,0,0||37.778,0.444,19
+active_de_p_bed_04	meshes/f/active_de_bed_04.nif	active_de_p_bed_04	single	-0.222,-27.556,10	-180	-90	0		sample_extents	80	280	sleep_main|0,0,0||29.778,82.444,23
+active_de_p_bed_13	meshes/f/active_de_bed_13.nif	active_de_p_bed_13	single	30,80,17	-180	-90	0	300,340,85	sample_extents	80	280
+active_de_p_bed_14	meshes/f/active_de_bed_14.nif	active_de_p_bed_14	single	48,-100,5	-180	-90	0	360,420,70	sample_extents	80	280
+ab_furn_deplnhammockrug04		ab_furn_deplnhammockrug04	hammock	25,50,0	-180	-90	0	300,340,85	sample_extents	20	220
+active_com_bunk_02	meshes/f/furn_com_bunk_02.nif	active_com_bunk_02	bottom_bunk	-10,-25,-2	-180	-90	0	220,360,70	sample_extents	20	260	sleep_main|0,0,0||20,14,-2	objectsleepsurfaceonly
+active_com_bunk_01	meshes/f/furn_com_bunk_01.nif	active_com_bunk_01	top_bunk	19.778,-4.556,65	-180	-90	0	220,360,70	sample_extents	20	260	sleep_main|0,0,0||19.778,-4.556,65	objectsleepsurfaceonly
+t_com_furn_bunk_02	meshes/pc/f/pc_furn_com_bunk_02.nif	t_com_furn_bunk_02	bottom_bunk	7.783,-41.975,7	-180	-90	0		sample_extents	80	280	sleep_main|0,0,0||7.783,-41.975,7
+active_com_bed_01	meshes/f/furn_com_bed_01.nif	active_com_bed_01	single	-20,-25,300	-180	-90	0	300,340,85	sample_extents	20	260
+active_com_bed_02	meshes/f/furn_com_bed_02.nif	active_com_bed_02	single	-5,-25,0	-180	-90	0	300,340,85	sample_extents	20	260
+active_com_bed_03	meshes/f/furn_com_bed_03.nif	active_com_bed_03	single	-20,-25,10	-180	-90	0	300,340,85	sample_extents	20	260	sleep_main|0,0,0||20,-45,5
+active_com_bed_04	meshes/f/furn_com_bed_04.nif	active_com_bed_04	single	-20,-25,10	-180	-90	0	300,340,85	sample_extents	20	260
+active_com_bed_05	meshes/f/furn_com_bed_05.nif	active_com_bed_05	single	-20,-25,10	-180	-90	0	300,340,85	sample_extents	20	260	sleep_main|0,0,0||-8,84,2
+active_com_bed_06	meshes/f/furn_com_bed_06.nif	active_com_bed_06	double	0,-10,8	-180	-90	0	380,420,70	object_origin_xy	20	280	sleep_right|0,0,0|-150,0,0|0,30,8|-58;sleep_left|0,0,0|150,0,0|0,-30,8|58
+active_de_r_bed_20	meshes/f/active_de_bed_20.nif	active_de_r_bed_20	double	44.778,12.444,10	-180	-90	0	380,420,70	object_origin_xy	20	280	sleep_right|0,0,0|150,0,0|19.778,-82.556,12|58;sleep_left|0,0,0|-150,0,0|19.778,82.556,12|-58
+active_com_bed_07	meshes/f/furn_com_bed_07.nif	active_com_bed_07	double	0,-10,8	-180	-90	0	380,420,70	object_origin_xy	20	280	sleep_a|0,0,0|-150,0,0|0,95,-32|-58;sleep_b|0,0,0|150,0,0|0,-95,-32|58
+chargen_bed	meshes/f/active_de_bedroll.nif	active_de_bedroll_mesh	bedroll	22.5,10,-25	-180	-90	0	300,340,85	sample_extents	25	260	sleep_main|0,0,0||22.5,0,-25
+active_de_bedroll	meshes/f/active_de_bedroll.nif	active_de_bedroll_mesh	bedroll	22.5,10,-25	-180	-90	0	300,340,85	sample_extents	25	260
+meshes/f/active_de_bedroll.nif	meshes/f/active_de_bedroll.nif	active_de_bedroll_mesh	bedroll	22.5,10,-25	-180	-90	0	300,340,85	sample_extents	25	260
+ab_furn_demidbedsingle02	meshes/oaab/u/de_rm_bed_s02.nif	ab_furn_demidbedsingle02	single	-0.222,-27.556,10	-180	-90	0		sample_extents	80	280	sleep_main|0,0,0||39.778,82.444,6
+ab_furn_demidbedbunk03	meshes/oaab/u/de_rm_bed_b03.nif	ab_furn_demidbedbunk03	bottom_bunk	39.778,-87.556,10	-180	-90	0		sample_extents	80	280	sleep_main|0,0,0||39.778,-87.556,10
+
+active_de_p_bed_16	meshes/f/active_de_bed_16.nif	active_de_p_bed_16	double	-20.222,-15.556,0	-180	-270	0		sample_extents	80	280	sleep_a|0,0,0||-20.222,-15.556,0|-58;sleep_b|0,0,0||-20.222,15.556,0|58
+
+active_de_p_bed_15	meshes/f/active_de_bed_15.nif	active_de_p_bed_15	double	-20.222,-77.556,5	-180	-270	0		sample_extents	80	280	sleep_a|0,0,0||-20.222,-77.556,5|-58;sleep_b|0,0,0||-20.222,77.556,5|58
+
+active_de_pr_bed_08	meshes/f/active_de_bed_08.nif	active_de_pr_bed_08	double	1.576,-27.788,10	-180	-270	0		sample_extents	80	280	sleep_a|0,0,0||1.576,-27.788,10|-58;sleep_b|0,0,0||1.576,27.788,10|58
+
+active_de_p_bed_03	meshes/f/active_de_bed_03.nif	active_de_p_bed_03	bottom_bunk	1.576,-27.788,10	-180	-90	0		sample_extents	80	280	sleep_main|0,0,0||1.576,-27.788,10
+
+active_de_p_bed_28	meshes/f/active_de_bed_28.nif	active_de_p_bed_28	hammock	34.778,32.444,-30	-180	-90	0		sample_extents	80	280	sleep_main|0,0,0||34.778,32.444,-30
+
+active_de_r_bed_06	meshes/f/active_de_bed_06.nif	active_de_r_bed_06	double	-10.222,33.444,-16	-180	-90	0		sample_extents	80	280	sleep_a|0,0,0||-10.222,33.444,-16|-58;sleep_b|0,0,0||-10.222,-33.444,-16|58
+active_de_pr_bed_26	meshes/f/active_de_bed_26.nif	active_de_pr_bed_26	double	141.576,-92.788,-15	-180	-270	0		sample_extents	80	280	sleep_a|0,0,0||141.576,-92.788,-15|-58;sleep_b|0,0,0||141.576,82.212,-20|58
+t_nor_furnm_bed_08	meshes/sky/f/sky_act_furn_n_m_bd08.nif	t_nor_furnm_bed_08	double	26.576,0,-80	-180	-90	0		sample_extents	80	280	sleep_a|0,0,0||26.576,42.788,-80|-58;sleep_b|0,0,0||26.576,-42.788,-80|58
+t_com_furn_bed_01	meshes/tr/f/tr_act_de_bed_02.nif	t_com_furn_bed_01	single	5.422,-16.788,9.308	-180	-90	0		sample_extents	80	280	sleep_main|0,0,0||5.422,-16.788,9.308
+t_com_furn_bed_02	meshes/tr/f/tr_act_de_bed_05.nif	t_com_furn_bed_02	single	26.576,2.212,11	-180	-90	0		sample_extents	80	280	sleep_main|0,0,0||26.576,2.212,11
+t_com_furn_bed_03	meshes/tr/f/tr_act_de_bed_06.nif	t_com_furn_bed_03	single	26.576,85.212,0	-180	-90	0		sample_extents	80	280	sleep_main|0,0,0||26.576,85.212,0
+t_nor_furnm_bed_01	meshes/sky/f/sky_act_furn_n_m_bd01.nif	t_nor_furnm_bed_01	single	5.422,-16.788,9.308	-180	-90	0		sample_extents	80	280	sleep_main|0,0,0||5.422,-16.788,9.308
+t_nor_furnm_bed_02	meshes/sky/f/sky_act_furn_n_m_bd02.nif	t_nor_furnm_bed_02	single	5.422,-16.788,9.308	-180	-90	0		sample_extents	80	280	sleep_main|0,0,0||5.422,-16.788,9.308
+ab_furn_comrchbeddouble03	meshes/oaab/u/com_r_bed_d2_red.nif	ab_furn_comrchbeddouble03	double	-0.981,-11.204,2.5	-180	-90	0		sample_extents	80	280	sleep_a|0,0,0||14.019,68.796,-7.5|-58;sleep_b|0,0,0||14.019,-68.796,-7.5|58

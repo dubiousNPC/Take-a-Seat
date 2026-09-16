@@ -53,7 +53,64 @@ local resolveSitAnim = seats.animForSeat
 local DEBUG = false
 
 local SIT_LOOPS    = 999
+
+-- Longest an enter/exit one-shot is allowed to hold up the sit. Generous
+-- enough for a real clip, short enough that an unshipped group name is a
+-- barely perceptible pause rather than a mod that never seats you.
+local ONE_SHOT_TIMEOUT = 1.0
 local SIT_PRIORITY = anim.PRIORITY.Scripted
+
+-- Per-target-kind priority and blend masks, built from the animation module so
+-- sitAnim_shared requires nothing itself. Seats, beds and props each get their
+-- own idle/enter/exit profile: see the block in sitAnim_shared.
+local ANIM_PROFILES = seats.buildAnimProfiles(anim)
+
+-- What is currently being sat on: seat | bed | misc, and its sub-type.
+local currentKind, currentSubType = nil, nil
+
+---Profile for the current target, falling back to seat behaviour so an
+---unclassified record behaves exactly as it did before this existed.
+local function profileFor(phase)
+    local kind = ANIM_PROFILES[currentKind or seats.TARGET_KIND.SEAT]
+                 or ANIM_PROFILES[seats.TARGET_KIND.SEAT]
+    return kind[phase]
+end
+
+---Play a short one-shot and call `done` when it finishes.
+---
+---Optional at every seat type: `group` nil means there is no enter/exit clip
+---for this target, and the caller proceeds immediately. A group the skeleton
+---does not define is ALSO a no-op -- playBlended neither errors nor calls the
+---ended handler -- so the timeout below is the thing that actually guarantees
+---`done` runs. Without it an unshipped clip name would hang the sit forever.
+---@param group string|nil
+---@param phase string 'enter' | 'exit'
+---@param done function
+local function playOneShot(group, phase, done)
+    if not group then return done() end
+
+    local profile = profileFor(phase)
+    local finished = false
+    local function finish()
+        if finished then return end
+        finished = true
+        done()
+    end
+
+    anim.addAnimationEndedHandler(self, function(endedGroup)
+        if endedGroup == group then finish() end
+    end)
+
+    anim.playBlended(self, group, {
+        loops       = profile.loops,
+        priority    = profile.priority,
+        blendMask   = profile.blendMask,
+        autoDisable = true,
+    })
+
+    -- Backstop. A missing clip never ends because it never started.
+    async:newUnsavableSimulationTimer(ONE_SHOT_TIMEOUT, finish)
+end
 
 -- ---------------------------------------------------------------------------
 -- RESOLVE LATENCY
@@ -718,7 +775,19 @@ local function commitSit(furniture, chairPos, sitPos, yaw)
     currentFurniture = furniture
     originalChairPos = furniture.position
     originalChairRot = furniture.rotation
-    currentSitAnim   = resolveSitAnim(getSeatType(furniture.recordId))
+    -- Classify once, here: seat | bed | misc plus its sub-type. Everything
+    -- downstream -- the idle group, the priority profile, the enter and exit
+    -- one-shots -- reads these two values. An unclassified record falls back
+    -- to seat behaviour, which is what every record did before beds and props
+    -- existed as separate kinds.
+    currentKind, currentSubType = seats.classify(furniture.recordId)
+    if not currentKind then
+        currentKind, currentSubType = seats.TARGET_KIND.SEAT,
+                                      getSeatType(furniture.recordId)
+    end
+
+    currentSitAnim   = seats.idleAnimFor(currentKind, currentSubType)
+                       or resolveSitAnim(getSeatType(furniture.recordId))
 
     core.sendGlobalEvent('SitTeleport', {
         position     = sitPos,
@@ -795,6 +864,13 @@ end
 local function stopSitting()
     if not isSitting then return end
     anim.cancel(self, currentSitAnim)
+
+    -- Exit one-shot, if this target has one. Fired after the idle is cancelled
+    -- and after the state is cleared, so nothing depends on it completing --
+    -- the player is already standing and free to move. An exit clip is a
+    -- flourish, never a gate.
+    local exitGroup = seats.exitAnimFor(currentKind, currentSubType)
+
     isSitting      = false
     sitAnimStarted = false
     abortResolve()
@@ -813,6 +889,10 @@ local function stopSitting()
         })
     end
     currentFurniture, originalChairPos, originalChairRot = nil, nil, nil
+
+    -- Played last, and nothing waits on it.
+    playOneShot(exitGroup, 'exit', function() end)
+    currentKind, currentSubType = nil, nil
 end
 
 -- ---------------------------------------------------------------------------
@@ -890,10 +970,18 @@ local function onSitAnimStart()
     -- above now covers that case, so a short settle is enough.
     async:newUnsavableSimulationTimer(SIT_ANIM_WINDOW, function()
         if not isSitting then return end
-        replayCount, replayWindowStart = 0, core.getSimulationTime()
-        anim.playBlended(self, currentSitAnim,
-            { loops = SIT_LOOPS, priority = SIT_PRIORITY })
-        sitAnimStarted = true
+        -- Enter one-shot first, then the idle. Both optional: with no enter
+        -- clip for this target playOneShot calls straight through and the
+        -- timing is identical to before.
+        playOneShot(seats.enterAnimFor(currentKind, currentSubType), 'enter', function()
+            if not isSitting then return end
+            replayCount, replayWindowStart = 0, core.getSimulationTime()
+            local idle = profileFor('idle')
+            anim.playBlended(self, currentSitAnim,
+                { loops = SIT_LOOPS, priority = idle.priority,
+                  blendMask = idle.blendMask })
+            sitAnimStarted = true
+        end)
     end)
 end
 

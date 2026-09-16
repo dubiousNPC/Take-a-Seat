@@ -1,0 +1,5 @@
+RecordID	Model	ProfileID	SlotName	YawBucket90	SleepRootLocalOffset	SleepPoseYawDeg	ObjectX	ObjectY	ObjectZ	YawMinDeg	YawMaxDeg	Notes
+# Local ProceduralChatter bed placement overrides.
+# These load after SDP's bedProfileVariants.txt, so rows here win during tuning.
+#
+# To lower the vanilla Dunmer lower bunk, uncomment and tune these rows:

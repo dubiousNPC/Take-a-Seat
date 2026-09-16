@@ -3,7 +3,7 @@
 # Shared services first. Both are bundled and version-guard themselves, so if
 # another mod ships a newer copy only that one runs.
 PLAYER: scripts/SharedRay/SharedRay_v2.lua
-PLAYER: scripts/AnimRefresh/AnimRefresh_v2.lua
+PLAYER: scripts/AnimRefresh/AnimRefresh_v3.lua
 
 PLAYER: scripts/take_a_seat/take_a_seat.lua
 GLOBAL: scripts/take_a_seat/take_a_seat_global.lua

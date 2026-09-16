@@ -1,0 +1,14 @@
+# Chair / stool calibration profiles for ProceduralChatter
+# Format: recordId <tab> zOffset <tab> xOffset <tab> yOffset <tab> slotCount
+#
+# For CHAIRS (e.g. furn_com_rm_chair_03):
+#   xOffset, yOffset, zOffset = offset from object origin to seat surface.
+#   These are added to the chair's position in SittingLogic to compute hitPos.
+#
+# For STOOLS / BENCHES:
+#   zOffset    = vertical adjustment applied by SittingGlobal after seating
+#   yOffset    = forward/backward adjustment along the facing direction
+#   (xOffset is ignored)
+
+# Default imperial stool (no SDP profile yet)
+furn_com_p_stool_01	-36	0	-7	1

@@ -1,0 +1,7 @@
+# RecordID	Model
+furn_com_p_table_01	
+furn_de_p_table_04	
+furn_com_table_03	furn_com_table_03.nif
+furn_com_rm_table_03	furn_com_rm_table_03.nif
+furn_de_bar_01
+furn_de_bar_03

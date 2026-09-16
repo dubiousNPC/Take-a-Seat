@@ -1,0 +1,55 @@
+RecordID	Model	ProfileID	SlotName	YawBucket90	SleepRootLocalOffset	SleepPoseYawDeg	ObjectX	ObjectY	ObjectZ	YawMinDeg	YawMaxDeg	Notes
+# Optional orientation-specific sleep profile variants.
+# Key: RecordID + Model + ProfileID + SlotName + YawBucket90. ObjectX/Y/Z and YawMinDeg/YawMaxDeg narrow a row to a specific placement or yaw range when one orientation bucket is too broad.
+active_de_p_bed_09	meshes/f/active_de_bed_09.nif	active_de_p_bed_09	sleep_main	0	29.778,82.444,10	-90						calibrated from luce_mio_bfg_marshaxe developer-menu export; bunk-bed lower/usable slot
+active_de_r_bed_20	meshes/f/active_de_bed_20.nif	active_de_r_bed_20	sleep_right	270	19.778,-82.556,12	-90						calibrated from 2026-05-19 08:10 log export_sequence latest; Briras Tyravel/right slot; yawBucket45=270
+active_de_r_bed_20	meshes/f/active_de_bed_20.nif	active_de_r_bed_20	sleep_left	270	19.778,82.556,12	-90						mirrored from calibrated right slot after 2026-05-23 Gnisis Madach Tradehouse log showed missing second double-bed slot
+active_de_p_bed_04	meshes/f/active_de_bed_04.nif	active_de_p_bed_04	sleep_main	180	29.778,82.444,23	-90						calibrated from 2026-05-19 10:07 log export; Ald-ruhn Ald Skar Inn; yawBucket45=180
+active_de_p_bed_10	meshes/f/active_de_bed_10.nif	active_de_p_bed_10	sleep_main	180	37.778,0.444,19	-90						calibrated from 2026-05-19 10:07 log export; Ald-ruhn Ald Skar Inn; yawBucket45=180
+active_com_bunk_02	meshes/f/furn_com_bunk_02.nif	active_com_bunk_02	sleep_main	180	20,14,-2	-90						calibrated from 2026-05-19 11:52 log export; bottom bunk; objectYawDeg=-180; yawBucket45=180
+active_com_bunk_02	meshes/f/furn_com_bunk_02.nif	active_com_bunk_02	sleep_main	0	15,-63,-2	-90						calibrated from 2026-05-20 Lewis export; bottom bunk; objectYawDeg=0; yawBucket45=0
+active_com_bunk_01	meshes/f/furn_com_bunk_01.nif	active_com_bunk_01	sleep_main	180	19.778,-4.556,65	-90						calibrated from 2026-05-22 Yakum Hairshashishi export; top bunk; objectYawDeg=177.617; yawBucket45=180; Z converted after VA sleep root normalization
+active_com_bed_05	meshes/f/furn_com_bed_05.nif	active_com_bed_05	sleep_main	0	32,-1,2	-90						calibrated from 2026-05-23 Erval active_com_bed_05 export after VA root normalization; replaces older yaw-0 long-axis row
+active_com_bed_05	meshes/f/furn_com_bed_05.nif	active_com_bed_05	sleep_main	270	22,-1,2	-90						calibrated from 2026-05-23 Fargoth/Dralas active_com_bed_05 exports after VA root normalization
+active_com_bed_07	meshes/f/furn_com_bed_07.nif	active_com_bed_07	sleep_a	90	0,95,-32	-90						calibrated from 2026-05-23 Ahnassi active_com_bed_07 slot A nudge trail; mirrored slot B lives in bedProfiles.txt
+active_com_bed_07	meshes/f/furn_com_bed_07.nif	active_com_bed_07	sleep_b	90	0,-95,-32	-90						mirrored from 2026-05-23 Ahnassi active_com_bed_07 slot A calibration; double bed slot B
+active_com_bed_02	meshes/f/furn_com_bed_02.nif	active_com_bed_02	sleep_main	90	40,-5,10	-90						calibrated from 2026-05-19 14:04 log; Tolvise Othralen manual daytime test; yawBucket45=90
+active_com_bed_02	meshes/f/furn_com_bed_02.nif	active_com_bed_02	sleep_main	90	40,75,-20	-90	1073.503	-258.918	-98.265	85	95	Dagon Fel End of the World Renter Rooms scaled yaw-90 placement from intentional 2026-05-24 export; objectScale=0.95, scoped by object position/yaw so Arrille yaw-90 normalization remains untouched
+active_com_bed_02	meshes/f/furn_com_bed_02.nif	active_com_bed_02	sleep_main	0	-40,25,10	-90	3265.574	3787.193	543.553	-5	5	Nivalis Black Ogre yaw-0 common-bed placement variant from repeated Ken print; keeps existing Old Ebonheart yaw-0 sdpvasitting9 normalization intact
+active_com_bed_02	meshes/f/furn_com_bed_02.nif	active_com_bed_02	sleep_main	0	-15,110,10	-90	4206.768	4713.850	15263.553	-5	5	Old Ebonheart Guild of Mages Basement yaw-0 common-bed placement variant from 2026-05-25 Ken export; avoids replacing the broad yaw-0 sdpvasitting9 normalization for every active_com_bed_02
+active_com_bed_01	meshes/f/furn_com_bed_01.nif	active_com_bed_01	default		0,-25,-40	-90	-158.417	820.57	701.935			Firewatch Grand Chapel of Akatosh placement-specific common bed root; object-position scoped, yaw-agnostic because this profile uses the default generated slot.
+ab_furn_comrchbeddouble03	meshes/oaab/u/com_r_bed_d2_red.nif	ab_furn_comrchbeddouble03	sleep_a	180	14.019,68.796,-7.5	-90						calibrated from 2026-05-23 Caldera Irgola slot A export; explicit OAAB red common double bed
+ab_furn_comrchbeddouble03	meshes/oaab/u/com_r_bed_d2_red.nif	ab_furn_comrchbeddouble03	sleep_b	180	14.019,-68.796,-7.5	-90						mirrored from 2026-05-23 Caldera Irgola slot A export; explicit OAAB red common double bed
+ab_furn_demidbedbunk03	meshes/oaab/u/de_rm_bed_b03.nif	ab_furn_demidbedbunk03	sleep_main	90	25.778,-87.556,-15	-88	34.578	-1399.337	-683.578	75	85	Sharn Gra-muzgob BMG placement from 2026-05-22 export; scoped by object position and yaw range so Marayn's same-record bunk keeps the generic row
+ab_furn_demidbedbunk03	meshes/oaab/u/de_rm_bed_b03.nif	ab_furn_demidbedbunk03	sleep_main	90	-100.222,-7.556,-20	-90						generic yaw-90 BMG Demid bunk fallback; narrowed placement rows above take precedence when ObjectX/Y/Z or YawMinDeg/YawMaxDeg match
+
+active_de_p_bed_16	meshes/f/active_de_bed_16.nif	active_de_p_bed_16	sleep_a	180	-27.222,2.444,10	-270						calibrated orientation variant from 2026-05-19 log; printed as slot A; objectYawDeg=-180; yawBucket45=180
+
+active_de_p_bed_16	meshes/f/active_de_bed_16.nif	active_de_p_bed_16	sleep_b	180	-27.222,122.556,10	-270						calibrated orientation variant from 2026-05-22 Vala Catraso export; objectYawDeg=-180; yawBucket45=180
+
+active_de_p_bed_16	meshes/f/active_de_bed_16.nif	active_de_p_bed_16	sleep_a	90	-20.222,-15.556,0	-270						calibrated orientation variant from 2026-05-19 log; printed as slot A; objectYawDeg=90; yawBucket45=90
+
+active_de_p_bed_16	meshes/f/active_de_bed_16.nif	active_de_p_bed_16	sleep_b	90	-30.222,45.556,0	-278						calibrated orientation variant from 2026-05-22 Orrent Geontene export; objectYawDeg=90; yawBucket45=90
+
+active_de_p_bed_15	meshes/f/active_de_bed_15.nif	active_de_p_bed_15	sleep_a	180	-20.222,-77.556,5	-270						calibrated orientation variant from 2026-05-22 Tyermaillin export; double bed slot A; objectYawDeg=-180; yawBucket45=180
+
+active_de_p_bed_15	meshes/f/active_de_bed_15.nif	active_de_p_bed_15	sleep_b	180	-20.222,77.556,5	-270						mirrored slot B inferred from 2026-05-22 Tyermaillin slot A export; double bed; objectYawDeg=-180; yawBucket45=180
+
+active_de_p_bed_15	meshes/f/active_de_bed_15.nif	active_de_p_bed_15	sleep_a	270	-17.222,-77.556,8	-270						calibrated orientation variant from 2026-05-22 Itan export; double bed slot A; objectYawDeg=-88.808; yawBucket45=270
+
+active_de_p_bed_15	meshes/f/active_de_bed_15.nif	active_de_p_bed_15	sleep_b	270	-17.222,77.556,8	-270						mirrored slot B inferred from 2026-05-22 Itan slot A export; double bed; objectYawDeg=-88.808; yawBucket45=270
+
+active_de_pr_bed_08	meshes/f/active_de_bed_08.nif	active_de_pr_bed_08	sleep_a	180	1.576,-27.788,10	-270						promoted from 2026-05-23 Gnisis Madach Tradehouse Snakha export; user identified as double bed slot A
+active_de_pr_bed_08	meshes/f/active_de_bed_08.nif	active_de_pr_bed_08	sleep_b	180	1.576,27.788,10	-270						mirrored from 2026-05-23 Gnisis Madach Tradehouse slot A calibration; double bed slot B
+active_de_p_bed_03	meshes/f/active_de_bed_03.nif	active_de_p_bed_03	sleep_main	0	1.576,-27.788,10	-90						promoted from 2026-05-23 Gnisis Temple Zanmulk export; user identified as lower bunk, pose-specific correction is in animationNormalizationOffsets.txt
+
+active_de_p_bed_28	meshes/f/active_de_bed_28.nif	active_de_p_bed_28	sleep_main	0	34.778,32.444,-30	-90						calibrated hammock orientation variant from 2026-05-19 log; objectYawDeg=17.189; yawBucket45=0
+active_de_p_bed_28	meshes/f/active_de_bed_28.nif	active_de_p_bed_28	sleep_main	0	14.778,-67.556,-125	90	-1320.461	-195.013	-471.038	320	330	Five Fathoms Flophouse hammock placement from 3.3.7 test; scoped by object position/yaw so the Selensa hammock row remains untouched
+
+active_de_p_bed_28	meshes/f/active_de_bed_28.nif	active_de_p_bed_28	sleep_main	90	22.778,52.444,-30	-270						calibrated hammock orientation variant from 2026-05-22 Tsiya export; objectYawDeg=90; yawBucket45=90
+
+active_de_r_bed_06	meshes/f/active_de_bed_06.nif	active_de_r_bed_06	sleep_a	180	-10.222,33.444,-16	-90						calibrated orientation variant from 2026-05-19 log; printed as slot A; objectYawDeg=179.518; yawBucket45=180
+
+active_de_r_bed_06	meshes/f/active_de_bed_06.nif	active_de_r_bed_06	sleep_b	180	-10.222,-33.444,-16	-90						mirrored slot B inferred from 2026-05-19 slot A export; objectYawDeg=179.518; yawBucket45=180
+
+active_de_p_bed_09	meshes/f/active_de_bed_09.nif	active_de_p_bed_09	sleep_main	90	154.778,2.444,-80	-90						calibrated orientation variant from 2026-05-19 log; objectYawDeg=107.189; yawBucket45=90
