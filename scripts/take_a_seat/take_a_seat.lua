@@ -86,6 +86,14 @@ end
 ---@param group string|nil
 ---@param phase string 'enter' | 'exit'
 ---@param done function
+-- [group] = finish, for one-shots in flight. Resolved by the single
+-- file-scope ended handler (EVENT WIRING below). The ended-handler API lives on
+-- I.AnimationController and has no remove, so registering one per play would
+-- leak a handler per sit; openmw.animation has no ended-handler at all (the
+-- previous `anim.addAnimationEndedHandler(self, ...)` was a call to nil, latent
+-- only because every enter/exit table ships empty).
+local pendingOneShot = {}
+
 local function playOneShot(group, phase, done)
     if not group then return done() end
 
@@ -94,12 +102,11 @@ local function playOneShot(group, phase, done)
     local function finish()
         if finished then return end
         finished = true
+        if pendingOneShot[group] == finish then pendingOneShot[group] = nil end
         done()
     end
 
-    anim.addAnimationEndedHandler(self, function(endedGroup)
-        if endedGroup == group then finish() end
-    end)
+    pendingOneShot[group] = finish
 
     anim.playBlended(self, group, {
         loops       = profile.loops,
@@ -931,6 +938,10 @@ local REPLAY_BURST_WINDOW = 1.0
 
 if I.AnimationController and I.AnimationController.addAnimationEndedHandler then
     I.AnimationController.addAnimationEndedHandler(function(groupname)
+        -- One-shots first. Without I.AnimationController the timeout in
+        -- playOneShot still guarantees `done` runs, one second late.
+        local oneShot = pendingOneShot[groupname]
+        if oneShot then oneShot() return end
         if not (isSitting and sitAnimStarted and groupname == currentSitAnim) then
             return
         end

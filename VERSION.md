@@ -1,3 +1,57 @@
+# Take a Seat v0.32
+
+## Enter/exit one-shots called a function that does not exist
+
+`playOneShot` registered its "clip finished" callback with
+
+```lua
+anim.addAnimationEndedHandler(self, function(endedGroup) ... end)
+```
+
+`openmw.animation` has no `addAnimationEndedHandler`. It exists only as
+`I.AnimationController.addAnimationEndedHandler(handler)`, which takes no
+actor. The call is to nil, so it raises before `playBlended`, before the
+timeout backstop is armed, and before `done` can ever run.
+
+**Latent in v0.31.** Every enter/exit clip table ships empty, so `playOneShot`
+returned at `if not group`. The first entry uncommented in `SEAT_ENTER_ANIM`
+(the documented way to add a clip) would have broken sitting on that seat.
+The idle pose would never start. On standing up, the raise would have skipped
+`currentKind, currentSubType = nil, nil`.
+
+It surfaced only because `api_sweep.py` was fixed. Until now that tool had
+never checked anything (see project doc `claude/api-sweep-was-vacuous.md`).
+
+### Fix
+
+- One file-scope dispatcher. `pendingOneShot[group] = finish`, and the
+  existing `I.AnimationController` ended handler resolves it before its
+  sit-idle replay logic. `I.AnimationController` has no way to remove a
+  handler, so registering one per play would have leaked a handler for every
+  sit.
+- `finish` clears its own entry, and only if it is still its own. A replayed
+  group cannot finish someone else's one-shot.
+- If `I.AnimationController` is absent, the 1s timeout still guarantees `done`.
+
+### Test
+
+`tools/test_oneshot.lua` extracts the real `playOneShot` and the real ended
+handler and drives them. 10/10. The v0.31 file fails it.
+
+```
+python3 tools/luarun.py tools/test_oneshot.lua
+```
+
+### Sweep (all clean)
+
+luacheck 6/6 · check_load 6/6 · globalcheck 0 · ctxcheck 0 issues ·
+check_manifest 0 · api_sweep: the only items left to check by hand are
+`self.position` (an inherited GameObject field) and third-party interfaces.
+`tools/api_sweep.py` and `tools/check_load.py` are replaced with the fixed
+versions.
+
+---
+
 # Take a Seat v0.30
 
 ---
