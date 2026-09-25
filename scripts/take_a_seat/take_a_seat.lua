@@ -768,6 +768,9 @@ end
 
 local function subscribeRefresh()
     if I.AnimRefresh and I.AnimRefresh.subscribe then
+        -- Deliberately NO `verify = true`. This re-issues a looping POSE, and
+        -- a second delivery restarts it from frame 0 where the player can see
+        -- it. Cosmetic mods that re-attach VFX opt in; this one must not.
         I.AnimRefresh.subscribe("SitOnFurniture", onPerspectiveChanged)
     end
 end

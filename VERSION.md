@@ -1,3 +1,24 @@
+# Take a Seat v0.33
+
+## AnimRefresh v3 -> v4
+
+Bundled AnimRefresh is now `scripts/AnimRefresh/AnimRefresh_v4.lua`, rewritten
+after a review by the author of Sun's Dusk. It fires once per real model
+rebuild instead of four times per POV press, stops firing at all for
+vanity/preview (which rebuild nothing), and now covers the two causes v3
+missed entirely: **Rest/Travel/Training/Jail** and **loading a save**. The
+manifest line changed with the filename.
+
+This mod deliberately does **not** pass `{ verify = true }`: it re-issues a
+looping pose, and a second delivery would restart it from frame 0. That,
+plus v4 ignoring vanity, is what stops the sit pose twitching when the
+player idles in a chair and the camera drifts into vanity.
+
+Full reasoning, measurements and the subscriber contract: `ANIMREFRESH_V4.md`.
+Tested by `tools/test_animrefresh.lua` (19 checks) plus this mod's own suite.
+
+---
+
 # Take a Seat v0.32
 
 ## Enter/exit one-shots called a function that does not exist
