@@ -1,23 +1,5 @@
 ---@omw-context player
---[[
-    take_a_seat.lua -- event-driven sitting controller
 
-    No onFrame handler. Every code path is entered from a discrete event:
-
-      Activate keypress  -> input.registerTriggerHandler("Activate", ...)
-      camera settle      -> async:newUnsavableSimulationTimer
-      raycast results    -> nearby.asyncCastRenderingRay callbacks
-      animation cancelled-> I.AnimationController.addAnimationEndedHandler
-      fatigue regen      -> time.runRepeatedly at 1s
-      movement lock      -> types.Player.setControlSwitch (one-shot, not per-frame)
-
-    Consequence worth understanding before tuning: because the trigger handler
-    is not one of the three contexts where synchronous nearby.castRenderingRay
-    is legal (onFrame, user-input engine handlers, registerActionHandler
-    callbacks), EVERY ray in this file is asynchronous. The resolve is
-    therefore a callback chain spread over several frames instead of one
-    blocking burst. See RESOLVE LATENCY below.
-]]
 
 local self   = require('openmw.self')
 local anim   = require('openmw.animation')
@@ -40,10 +22,6 @@ local seats  = require('scripts.take_a_seat.sitAnim_shared')
 -- ---------------------------------------------------------------------------
 -- SEAT PROFILES
 -- ---------------------------------------------------------------------------
--- Seat classification, animation groups and height calibration all live in
--- scripts/take_a_seat/sitAnim_shared.lua so they can be extended without
--- touching this controller, and so other mods can read the same lists.
--- Local aliases below keep the call sites short.
 
 local SEAT_TYPE = seats.SEAT_TYPE
 local getSeatType    = seats.getSeatType
@@ -54,44 +32,26 @@ local DEBUG = false
 
 local SIT_LOOPS    = 999
 
--- Longest an enter/exit one-shot is allowed to hold up the sit. Generous
--- enough for a real clip, short enough that an unshipped group name is a
--- barely perceptible pause rather than a mod that never seats you.
+-- Longest an enter/exit one-shot is allowed to hold up the sit. 
 local ONE_SHOT_TIMEOUT = 1.0
 local SIT_PRIORITY = anim.PRIORITY.Scripted
 
--- Per-target-kind priority and blend masks, built from the animation module so
--- sitAnim_shared requires nothing itself. Seats, beds and props each get their
--- own idle/enter/exit profile: see the block in sitAnim_shared.
+-- Per-target-kind priority and blend masks
 local ANIM_PROFILES = seats.buildAnimProfiles(anim)
 
 -- What is currently being sat on: seat | bed | misc, and its sub-type.
 local currentKind, currentSubType = nil, nil
 
----Profile for the current target, falling back to seat behaviour so an
----unclassified record behaves exactly as it did before this existed.
+---Profile for the current target
 local function profileFor(phase)
     local kind = ANIM_PROFILES[currentKind or seats.TARGET_KIND.SEAT]
                  or ANIM_PROFILES[seats.TARGET_KIND.SEAT]
     return kind[phase]
 end
 
----Play a short one-shot and call `done` when it finishes.
----
----Optional at every seat type: `group` nil means there is no enter/exit clip
----for this target, and the caller proceeds immediately. A group the skeleton
----does not define is ALSO a no-op -- playBlended neither errors nor calls the
----ended handler -- so the timeout below is the thing that actually guarantees
----`done` runs. Without it an unshipped clip name would hang the sit forever.
 ---@param group string|nil
 ---@param phase string 'enter' | 'exit'
 ---@param done function
--- [group] = finish, for one-shots in flight. Resolved by the single
--- file-scope ended handler (EVENT WIRING below). The ended-handler API lives on
--- I.AnimationController and has no remove, so registering one per play would
--- leak a handler per sit; openmw.animation has no ended-handler at all (the
--- previous `anim.addAnimationEndedHandler(self, ...)` was a call to nil, latent
--- only because every enter/exit table ships empty).
 local pendingOneShot = {}
 
 local function playOneShot(group, phase, done)
@@ -122,14 +82,6 @@ end
 -- ---------------------------------------------------------------------------
 -- RESOLVE LATENCY
 -- ---------------------------------------------------------------------------
--- Each async raycast costs at least one callback round-trip. The stages chain,
--- so worst-case latency between keypress and being seated is roughly:
---     CHAIR_PUSH_MAX_ITER + SEAT_MAX_PIERCES + SEAT_MAX_PIERCES + 1
--- round-trips. These caps are set low deliberately. If sitting feels laggy,
--- lower CHAIR_PUSH_MAX_ITER first -- the solver converges in 2-3 iterations in
--- open rooms and only burns the full budget when wedged into a corner. Adding a
--- SIT_PIVOT_OFFSET entry for a chair skips the seat-surface stage entirely,
--- which is the single biggest latency win available per-record.
 local RESOLVE_TIMEOUT   = 3.0   -- seconds; abort a chain that never completes
 
 local MAX_PIERCES       = 4
@@ -180,8 +132,6 @@ end
 -- ASYNC RAY PRIMITIVES
 -- ---------------------------------------------------------------------------
 
--- Fire N independent rays at once; call done(results) when the last returns.
--- Parallel rather than sequential: N rays cost one round-trip, not N.
 local function castBatch(rays, done)
     local n = #rays
     if n == 0 then return done({}) end
@@ -196,9 +146,6 @@ local function castBatch(rays, done)
     end
 end
 
--- Walk a ray through hits, stepping past each one, up to maxPierces.
--- onHit(res) returns true to stop (res is handed to done), false to continue.
--- done(res or nil). Inherently sequential: costs up to maxPierces round-trips.
 local function castPiercing(from, to, maxPierces, onHit, done)
     local current, left = from, maxPierces
     local step
@@ -245,15 +192,8 @@ local originalChairRot = nil
 local currentSitAnim   = nil
 local controlsLocked   = false
 
--- Animation-restart burst guard. Declared here rather than beside the
--- ended-handler because the perspective-change handler also resets it, and
--- that runs earlier in the file.
 local replayCount, replayWindowStart = 0, 0
 
--- Every async callback in a resolve chain carries the token it started with.
--- Bumping the token invalidates all in-flight callbacks at once, which is how
--- an abort (stood up, walked away, pressed again) is expressed without needing
--- to track individual callbacks.
 local resolveToken   = 0
 local resolveActive  = false
 
@@ -266,25 +206,16 @@ end
 -- TARGETING
 -- ---------------------------------------------------------------------------
 
--- SharedRay is a single camera-forward ray, cast once per frame and shared by
--- every mod that consumes it. Reading it costs nothing -- no cast is issued
--- here. It only covers "looking straight at it", so the fan below remains for
--- chairs that sit below or off the crosshair.
 local function tryFurnitureFastPath()
     if not (I.SharedRay and I.SharedRay.get) then return nil end
     local result = I.SharedRay.get()
     if not result or not result.hit then return nil end
     local obj = result.hitObject
-    -- SharedRay validated this at delivery, but delivery was last frame and any
-    -- access to an invalidated object raises, so re-check before reading fields.
     if not obj or not obj:isValid() then return nil end
     if not isSittable(obj.recordId) then return nil end
     return obj
 end
 
--- The six fan rays are independent, so they run concurrently and the winner is
--- picked afterwards by the original priority order (flat first, then pitched).
--- Sequential would cost 6 * MAX_PIERCES round-trips; this costs MAX_PIERCES.
 local function findFurnitureAsync(done)
     local fast = tryFurnitureFastPath()
     if fast then return done(fast) end
@@ -417,8 +348,6 @@ local function findSeatSurface(chairPos, furniture, token, done)
     local allZHits = {}
     local stopZ = chairPos.z - SEAT_PROBE_END
 
-    -- The nine columns are independent, so they pierce concurrently; only the
-    -- pierces *within* one column are sequential.
     forEachAsync(offsets, function(off, _, finished)
         local bx, by = chairPos.x + off.x, chairPos.y + off.y
         local from = util.vector3(bx, by, chairPos.z + SEAT_PROBE_START)
@@ -460,12 +389,6 @@ local function findSeatSurface(chairPos, furniture, token, done)
             local diff = best.zMax - chairPos.z
             print(string.format("[sit] seat Z=%.1f pivot Z=%.1f diff=%.1f hits=%d clusters=%d",
                 best.zMax, chairPos.z, diff, #allZHits, #clusters))
-            -- Bracket quotes escaped. Unescaped, the literal ends at
-            -- `SIT_PIVOT_OFFSET[` and Lua reads the rest as `% s "..."` --
-            -- a modulo followed by a call to an undeclared global `s`. That
-            -- parses, so luacheck passes it, and it raises "attempt to call a
-            -- nil value (global 's')" the moment DEBUG is turned on: exactly
-            -- when someone is trying to read the tip this line prints.
             print(string.format("[sit] TIP: if correct, add SIT_PIVOT_OFFSET[\"%s\"] = %.1f to sitAnim_shared.lua",
                 furniture.recordId or "?", diff))
         end
@@ -552,9 +475,6 @@ end
 -- ---------------------------------------------------------------------------
 -- CONTROL LOCK
 -- ---------------------------------------------------------------------------
--- One-shot switches instead of zeroing self.controls every frame. These persist
--- until cleared, so onLoad below force-releases them: unlike the old per-frame
--- writes, a lock left set would survive a reload and soft-lock the player.
 
 local function lockControls()
     if controlsLocked then return end
@@ -578,22 +498,6 @@ end
 -- ---------------------------------------------------------------------------
 -- CAMERA OFFSET
 -- ---------------------------------------------------------------------------
--- The player's chosen perspective is honoured -- this never switches the view.
--- Instead each view gets its own offset, because they need different framing
--- and use different APIs:
---
---   first person : camera.setFirstPersonOffset, a 3d vector measured from the
---                  character's head (x right, y forward, z up)
---   third person : camera.setFocalPreferredOffset, a 2d vector from the tracked
---                  position (x right, y up)
---
--- Vertical defaults are 0 in first person and -75 in third: the first person
--- camera already sits at head height so it usually needs nothing, while the
--- third person focal point frames seated from too high without help.
---
--- The built-in camera script manages the third person offset too, so it is
--- told to stand down for the duration via disableThirdPersonOffsetControl. The
--- tag is this mod's name, so it cannot clash with another mod holding its own.
 
 local SETTINGS_PAGE  = "TakeASeat"
 local SETTINGS_GROUP = "SettingsTakeASeatCamera"
@@ -602,35 +506,16 @@ local CAMERA_TAG     = "TakeASeat"
 -- ---------------------------------------------------------------------------
 -- SETTINGS RENDERERS
 -- ---------------------------------------------------------------------------
--- SuperSettingsRenderers ships a real slider ("SuperSlider6") with step
--- arrows, min/max labels, a default marker and a reset button. It is an
--- OPTIONAL dependency: it advertises itself in a session-lifetime storage
--- section, so its presence can be checked without requiring anything from it.
---
--- The section carries both an exact id ("SuperSlider6" = true) and a family
--- version ("SuperSlider" = 6), so checking the family means a future
--- SuperSlider7 is picked up without a code change here.
---
--- Absent, everything falls back to the built-in "number" renderer and the
--- settings behave exactly as before, just without the slider.
 
 local installedRenderers = storage.playerSection("InstalledSettingsRenderers")
 
 local function sliderAvailable()
-    -- No pcall. playerSection is available in this context and creates the
-    -- section on demand, and :get on an absent key returns nil -- which is the
-    -- case being tested for anyway. Wrapping it would only hide a real error
-    -- from a future storage change behind the same nil the absent-renderer
-    -- path already produces.
     local version = installedRenderers:get("SuperSlider")
     return type(version) == "number" and version >= 6
 end
 
 local HAS_SLIDER = sliderAvailable()
 
--- Builds a slider setting when the renderer is present, and an equivalent
--- number setting when it is not. `default` is repeated inside argument on
--- purpose: the slider needs it there for the default marker and reset button.
 local function numberSetting(key, name, description, default, min, max, step, unit)
     if HAS_SLIDER then
         return {
@@ -721,10 +606,6 @@ local function applyCameraOffset()
         cameraOffsetHeld = true
     end
 
-    -- Only the active view is offset and the other is zeroed, so a stale value
-    -- cannot survive a perspective change. Vanity and preview modes are
-    -- third-person-shaped, so anything that is not FirstPerson takes the third
-    -- person offset.
     if camera.getMode() == camera.MODE.FirstPerson then
         camera.setFirstPersonOffset(util.vector3(
             cameraSettings:get("FP_OFFSET_H") or 0,
@@ -739,8 +620,6 @@ local function applyCameraOffset()
     end
 end
 
--- Live update: changing a value in the settings menu applies immediately
--- instead of waiting for the next seated session.
 cameraSettings:subscribe(async:callback(function()
     applyCameraOffset()
 end))
@@ -748,17 +627,7 @@ end))
 -- ---------------------------------------------------------------------------
 -- PERSPECTIVE CHANGE
 -- ---------------------------------------------------------------------------
--- Switching perspective rebuilds the player's animation object and drops
--- scripted animations with it, so the sitting pose vanishes on a POV press.
--- The camera is deliberately NOT locked to work around that -- being able to
--- look at the pose is the point -- so instead the pose is re-issued after the
--- switch settles.
---
--- I.AnimRefresh defers past the skeleton rebuild before calling back; firing
--- immediately would re-issue onto a skeleton about to be replaced.
 local function onPerspectiveChanged()
-    -- Runs even when not seated so a lingering offset is released if the sit
-    -- ended while the notification was still settling.
     applyCameraOffset()
     if not (isSitting and sitAnimStarted and currentSitAnim) then return end
     replayCount, replayWindowStart = 0, core.getSimulationTime()
@@ -768,9 +637,6 @@ end
 
 local function subscribeRefresh()
     if I.AnimRefresh and I.AnimRefresh.subscribe then
-        -- Deliberately NO `verify = true`. This re-issues a looping POSE, and
-        -- a second delivery restarts it from frame 0 where the player can see
-        -- it. Cosmetic mods that re-attach VFX opt in; this one must not.
         I.AnimRefresh.subscribe("SitOnFurniture", onPerspectiveChanged)
     end
 end
@@ -785,11 +651,6 @@ local function commitSit(furniture, chairPos, sitPos, yaw)
     currentFurniture = furniture
     originalChairPos = furniture.position
     originalChairRot = furniture.rotation
-    -- Classify once, here: seat | bed | misc plus its sub-type. Everything
-    -- downstream -- the idle group, the priority profile, the enter and exit
-    -- one-shots -- reads these two values. An unclassified record falls back
-    -- to seat behaviour, which is what every record did before beds and props
-    -- existed as separate kinds.
     currentKind, currentSubType = seats.classify(furniture.recordId)
     if not currentKind then
         currentKind, currentSubType = seats.TARGET_KIND.SEAT,
@@ -806,8 +667,7 @@ local function commitSit(furniture, chairPos, sitPos, yaw)
         furniturePos = chairPos,
     })
 
-    -- Public hook. Add-ons (see the FPV_experimental package) listen for these
-    -- rather than patching this script; nothing here depends on anyone doing so.
+    -- Public hook. Add-ons
     self.object:sendEvent('TakeASeat_Seated', {
         furniture = furniture,
         seatType  = getSeatType(furniture.recordId),
@@ -820,9 +680,6 @@ local function commitSit(furniture, chairPos, sitPos, yaw)
     lockControls()
     subscribeRefresh()
     applyCameraOffset()
-    -- Immersive FPV (a separate, third-party mod) listens for this to drop its
-    -- simulated eye height while seated. Unrelated to the FPV_experimental
-    -- add-on; harmless when neither is installed.
     self.object:sendEvent('FPV_SetEyeDropOverride', { offset = -60 })
 end
 
@@ -833,15 +690,6 @@ local function beginSit(furniture)
     local token = resolveToken
     resolveActive = true
 
-    -- The player's chosen perspective is honoured: sitting never switches the
-    -- camera. Use the per-view offsets in the settings menu to frame the pose
-    -- instead. (An earlier version forced third person here and restored first
-    -- person on standing, which overrode a deliberate choice and needed a
-    -- settle delay before the teleport could land.)
-
-    -- Safety net: if any callback in the chain never returns (object unloaded
-    -- mid-flight, cell change), the resolve would otherwise hang forever and
-    -- block all future sit attempts.
     async:newUnsavableSimulationTimer(RESOLVE_TIMEOUT, function()
         if token == resolveToken and resolveActive then
             if DEBUG then print("[sit] resolve timed out") end
@@ -875,10 +723,6 @@ local function stopSitting()
     if not isSitting then return end
     anim.cancel(self, currentSitAnim)
 
-    -- Exit one-shot, if this target has one. Fired after the idle is cancelled
-    -- and after the state is cleared, so nothing depends on it completing --
-    -- the player is already standing and free to move. An exit clip is a
-    -- flourish, never a gate.
     local exitGroup = seats.exitAnimFor(currentKind, currentSubType)
 
     isSitting      = false
@@ -909,15 +753,6 @@ end
 -- EVENT WIRING
 -- ---------------------------------------------------------------------------
 
--- Replaces per-frame input.isActionPressed polling. Trigger handlers are
--- edge-driven by the engine and respect the player's keybinding, so the manual
--- was-down/is-down edge detection disappears too.
---
--- Guarded on HUD visibility, the same way SunsDusk gates its interaction
--- actions: a hidden HUD means a menu, dialogue or cutscene has the player's
--- attention, and Activate should not sit or stand through it. The guard covers
--- the whole handler rather than just the sit branch, so standing up is blocked
--- in those states too.
 input.registerTriggerHandler("Activate", async:callback(function()
     if I.UI and I.UI.isHudVisible and not I.UI.isHudVisible() then return end
     if isSitting then
@@ -929,20 +764,11 @@ input.registerTriggerHandler("Activate", async:callback(function()
     end
 end))
 
--- Replaces the per-frame `not anim.isPlaying(...)` re-trigger poll. The hardcoded
--- character controller can cancel scripted animations at any time; this fires
--- when that happens instead of us checking every frame in case it did.
---
--- The poll was implicitly rate-limited by the frame rate. This is not, so a
--- group that ends immediately (typo'd name, missing text keys) would replay in
--- a tight loop. Bail out after a burst of rapid restarts rather than spin.
 local REPLAY_BURST_LIMIT  = 5
 local REPLAY_BURST_WINDOW = 1.0
 
 if I.AnimationController and I.AnimationController.addAnimationEndedHandler then
     I.AnimationController.addAnimationEndedHandler(function(groupname)
-        -- One-shots first. Without I.AnimationController the timeout in
-        -- playOneShot still guarantees `done` runs, one second late.
         local oneShot = pendingOneShot[groupname]
         if oneShot then oneShot() return end
         if not (isSitting and sitAnimStarted and groupname == currentSitAnim) then
@@ -966,8 +792,6 @@ if I.AnimationController and I.AnimationController.addAnimationEndedHandler then
     end)
 end
 
--- Replaces the accumulate-dt fatigue tick. Registered at file scope because
--- runRepeatedly stops evaluating across a save load unless started at init.
 time.runRepeatedly(function()
     if not isSitting then return end
     local fatigue = types.Actor.stats.dynamic.fatigue(self)   -- documented as nil-able
@@ -978,15 +802,8 @@ end, FATIGUE_TICK_RATE)
 
 local function onSitAnimStart()
     if not isSitting then return end
-    -- Teleports land next frame, so give the position a beat to settle before
-    -- the pose starts. The old code played immediately and relied on a per-frame
-    -- isPlaying poll to recover if the controller rejected it; the ended-handler
-    -- above now covers that case, so a short settle is enough.
     async:newUnsavableSimulationTimer(SIT_ANIM_WINDOW, function()
         if not isSitting then return end
-        -- Enter one-shot first, then the idle. Both optional: with no enter
-        -- clip for this target playOneShot calls straight through and the
-        -- timing is identical to before.
         playOneShot(seats.enterAnimFor(currentKind, currentSubType), 'enter', function()
             if not isSitting then return end
             replayCount, replayWindowStart = 0, core.getSimulationTime()
@@ -999,11 +816,6 @@ local function onSitAnimStart()
     end)
 end
 
--- Control switches are engine state and ARE written into the save, unlike the
--- old per-frame `self.controls.movement = 0` writes which simply stopped
--- happening. Saving mid-sit would therefore restore a player who cannot move.
--- Record the lock in the save and undo it on load, rather than blanket-clearing
--- the switches (which would stomp a lock some other mod legitimately holds).
 local function onSave()
     return { controlsLocked = controlsLocked }
 end
@@ -1014,9 +826,6 @@ local function onLoad(data)
     resolveToken = resolveToken + 1
     unsubscribeRefresh()
     clearCameraOffset()
-    -- Sit state does not survive a load: the chair's world transform is not
-    -- restored either, which is a known limitation of this mod rather than
-    -- something the rewrite introduces.
     if data and data.controlsLocked then
         controlsLocked = true
         releaseControls()

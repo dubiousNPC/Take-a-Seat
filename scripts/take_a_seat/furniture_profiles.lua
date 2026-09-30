@@ -15,8 +15,7 @@
 
 local M = {}
 
--- recordId -> seat type string. Merged UNDER the mod's own table, so a
--- hand-authored entry always wins over a generated one.
+-- recordId -> seat type string
 M.SEATS = {
     ['ab_furn_commidchaircushgreen'] = 'backed_chair',
     ['ab_furn_demidbench'] = 'bench',

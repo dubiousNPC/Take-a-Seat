@@ -1,4 +1,5 @@
 ---@omw-context global
+
 local world = require('openmw.world')
 local types = require('openmw.types')
 local util  = require('openmw.util')
