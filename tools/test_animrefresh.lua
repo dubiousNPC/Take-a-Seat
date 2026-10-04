@@ -1,8 +1,8 @@
--- AnimRefresh v4 contract test. Runs the REAL file against a simulated engine.
+-- AnimRefresh v5 contract test. Runs the REAL file against a simulated engine.
 --   python3 tools/luarun.py tools/test_animrefresh.lua
 -- Every check here corresponds to a fault demonstrated in v3 (see the review
 -- notes in the file header) or to an edge found while writing v4.
-local PATH = 'scripts/AnimRefresh/AnimRefresh_v4.lua'
+local PATH = 'scripts/AnimRefresh/AnimRefresh_v5.lua'
 local FAILED = false
 local function check(n, c, e)
     print((c and '  ok   ' or '  FAIL ') .. n .. (c and '' or ('  got: ' .. tostring(e))))
@@ -38,11 +38,21 @@ local AR = dofile(PATH)
 IFACES[AR.interfaceName] = AR.interface
 local AN = IFACES.AnimRefresh
 local H = AR.engineHandlers
-check('registers version 4', AN.version == 4)
+local E = AR.eventHandlers or {}
+check('registers version 5', AN.version == 5)
 check('no TogglePOV trigger handler is registered', true)   -- nothing to register into
+-- Every OpenMW engine handler is named on*. Anything else under engineHandlers
+-- is logged as "Not supported handler" and never called -- which is how
+-- UiModeChanged (an EVENT) sat dead in engineHandlers while every test that
+-- called H.UiModeChanged directly still passed.
+local bad = {}
+for k in pairs(H) do if not k:match('^on%u') then bad[#bad + 1] = k end end
+check('engineHandlers holds only engine handler names', #bad == 0, table.concat(bad, ','))
+check('UiModeChanged is registered as an event handler', type(E.UiModeChanged) == 'function')
 
 local n = 0
-local function cb() n = n + 1 end
+local TRACE=os.getenv('AR_TRACE')
+local function cb(m,p) n = n + 1; if TRACE then print(('    [trace] t=%.2f n=%d mode=%s prev=%s'):format(now,n,tostring(m),tostring(p))) end end
 local function run(sec)
     for _ = 1, math.floor(sec / 0.05 + 0.5) do advance(0.05); H.onUpdate(0.05) end
 end
@@ -97,12 +107,12 @@ AN.unsubscribe('B')
 
 -- UI modes ------------------------------------------------------------------
 n = 0
-H.UiModeChanged({ oldMode = 'Rest', newMode = nil })
+E.UiModeChanged({ oldMode = 'Rest', newMode = nil })
 settle()
 check('closing Rest delivers a refresh', n == 1, n)
 n = 0
-H.UiModeChanged({ oldMode = 'Inventory', newMode = nil })
-H.UiModeChanged({ oldMode = nil, newMode = 'Rest' })
+E.UiModeChanged({ oldMode = 'Inventory', newMode = nil })
+E.UiModeChanged({ oldMode = nil, newMode = 'Rest' })
 settle()
 check('opening a menu, or closing Inventory, delivers nothing', n == 0, n)
 

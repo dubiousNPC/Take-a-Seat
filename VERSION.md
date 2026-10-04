@@ -1,3 +1,39 @@
+# Take a Seat v0.34
+
+## AnimRefresh v4 -> v5: the Rest/Travel refresh had never run
+
+`UiModeChanged` is an EVENT, and v4 registered it under `engineHandlers`, so
+OpenMW rejected it with one log line per game:
+
+```
+Not supported handler 'UiModeChanged' in scripts/animrefresh/animrefresh_v4.lua
+```
+
+The consequence was that v4's Rest/Travel/Training/Jail refresh never fired in
+any mod shipping that file. For this mod that is the sit pose not being
+re-issued after resting.
+
+Fixed in `scripts/AnimRefresh/AnimRefresh_v5.lua`. The number moved because
+every mod bundles this file at one shared VFS path, so a corrected v4 and an
+uncorrected one are indistinguishable until install order picks one; the `>=`
+guard now settles it instead. Details in `ANIMREFRESH_V5.md`.
+
+- Manifest line updated to the new filename.
+- `tools/test_animrefresh.lua` now asserts the wiring (it previously called
+  `engineHandlers.UiModeChanged` directly and passed on a file the engine
+  refuses). It fails on the old v4 file.
+- New `tools/check_handlers.py`: loads each module and validates its handler
+  and event table keys against the documented engine handlers.
+
+This mod's subscriber is unchanged, including its deliberate omission of
+`{ verify = true }` — re-issuing a looping pose must not happen twice.
+
+Sweep clean: luacheck 6/6, check_load 6/6, check_handlers (11 keys, 0
+findings), globalcheck 0, ctxcheck 0, check_manifest 0.
+`test_animrefresh.lua` and `test_oneshot.lua` pass.
+
+---
+
 # Take a Seat v0.33
 
 ## AnimRefresh v3 -> v4
