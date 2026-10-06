@@ -1,5 +1,5 @@
 ---@omw-context player
-
+-- Take a Seat: sit on furniture. Activate a seat to sit, Activate again to stand.
 
 local self   = require('openmw.self')
 local anim   = require('openmw.animation')
@@ -16,14 +16,9 @@ local time   = require('openmw_aux.time')
 local seats  = require('scripts.take_a_seat.sitAnim_shared')
 
 -- ---------------------------------------------------------------------------
--- DATA
--- ---------------------------------------------------------------------------
-
--- ---------------------------------------------------------------------------
 -- SEAT PROFILES
 -- ---------------------------------------------------------------------------
 
-local SEAT_TYPE = seats.SEAT_TYPE
 local getSeatType    = seats.getSeatType
 local isSittable     = seats.isSittable
 local resolveSitAnim = seats.animForSeat
@@ -32,9 +27,8 @@ local DEBUG = false
 
 local SIT_LOOPS    = 999
 
--- Longest an enter/exit one-shot is allowed to hold up the sit. 
+-- Longest an enter/exit one-shot is allowed to hold up the sit.
 local ONE_SHOT_TIMEOUT = 1.0
-local SIT_PRIORITY = anim.PRIORITY.Scripted
 
 -- Per-target-kind priority and blend masks
 local ANIM_PROFILES = seats.buildAnimProfiles(anim)
@@ -49,11 +43,11 @@ local function profileFor(phase)
     return kind[phase]
 end
 
+local pendingOneShot = {}
+
 ---@param group string|nil
 ---@param phase string 'enter' | 'exit'
 ---@param done function
-local pendingOneShot = {}
-
 local function playOneShot(group, phase, done)
     if not group then return done() end
 
@@ -88,11 +82,11 @@ local MAX_PIERCES       = 4
 local SEAT_PROBE_START  = 150
 local SEAT_PROBE_END    = 10
 local SEAT_PROBE_RADIUS = 16
-local SEAT_MAX_PIERCES  = 6     -- was 10; each pierce is a round-trip now
+local SEAT_MAX_PIERCES  = 6     -- each pierce is an async round-trip
 local SEAT_CLUSTER_DIST = 6
 
-local FATIGUE_TICK_RATE   = 1     -- throttled to 1/sec
-local FATIGUE_TICK_AMOUNT = 20    -- was 10 per 0.5s; same restore rate per second
+local FATIGUE_TICK_RATE   = 1     -- seconds
+local FATIGUE_TICK_AMOUNT = 20
 
 local FLAT_RAYS    = { { z = 10 }, { z = 30 }, { z = 55 } }
 local PITCHED_RAYS = {
@@ -106,22 +100,14 @@ local PUSH_PROBE_DIST  = 80
 local PUSH_STRENGTH    = 15
 
 local CHAIR_PUSH_PROBE_COUNT = 8
-local CHAIR_PUSH_PROBE_DIST  = 90
 local CHAIR_PUSH_MIN_DIST    = 45
 local CHAIR_PUSH_MAX_MOVE    = 22
 local CHAIR_PUSH_STEP        = 2
-local CHAIR_PUSH_MAX_ITER    = 5     -- lowered again: each iteration is a round-trip
+local CHAIR_PUSH_MAX_ITER    = 5     -- each iteration is an async round-trip
 local CHAIR_PUSH_ORIGIN_DIST = 100
 local CHAIR_PUSH_PROBE_ZS    = { -10, 35, 80 }
 
 local SIT_ANIM_WINDOW    = 0.05
-
--- ---------------------------------------------------------------------------
--- CLASSIFICATION (memoized -- recordId is static per record)
--- ---------------------------------------------------------------------------
-
-
-
 
 local function getObjectYaw(obj)
     local forward = obj.rotation:apply(util.vector3(0, 1, 0))
@@ -491,11 +477,6 @@ local function releaseControls()
 end
 
 -- ---------------------------------------------------------------------------
--- SIT / STAND
--- ---------------------------------------------------------------------------
-
-
--- ---------------------------------------------------------------------------
 -- CAMERA OFFSET
 -- ---------------------------------------------------------------------------
 
@@ -627,12 +608,19 @@ end))
 -- ---------------------------------------------------------------------------
 -- PERSPECTIVE CHANGE
 -- ---------------------------------------------------------------------------
+local function playSitIdle()
+    local idle = profileFor('idle')
+    anim.playBlended(self, currentSitAnim,
+        { loops = SIT_LOOPS, priority = idle.priority, blendMask = idle.blendMask })
+end
+
+-- Re-issue only if the rebuild dropped the pose; a replay restarts it.
 local function onPerspectiveChanged()
     applyCameraOffset()
     if not (isSitting and sitAnimStarted and currentSitAnim) then return end
+    if anim.isPlaying(self, currentSitAnim) then return end
     replayCount, replayWindowStart = 0, core.getSimulationTime()
-    anim.playBlended(self, currentSitAnim,
-        { loops = SIT_LOOPS, priority = SIT_PRIORITY })
+    playSitIdle()
 end
 
 local function subscribeRefresh()
@@ -754,7 +742,7 @@ end
 -- ---------------------------------------------------------------------------
 
 input.registerTriggerHandler("Activate", async:callback(function()
-    if I.UI and I.UI.isHudVisible and not I.UI.isHudVisible() then return end
+    if I.UI and I.UI.getMode() ~= nil then return end
     if isSitting then
         stopSitting()
     elseif not resolveActive then
@@ -787,16 +775,18 @@ if I.AnimationController and I.AnimationController.addAnimationEndedHandler then
             sitAnimStarted = false   -- stop trying until the next sit
             return
         end
-        anim.playBlended(self, currentSitAnim,
-            { loops = SIT_LOOPS, priority = SIT_PRIORITY })
+        playSitIdle()
     end)
 end
 
 time.runRepeatedly(function()
     if not isSitting then return end
-    local fatigue = types.Actor.stats.dynamic.fatigue(self)   -- documented as nil-able
+    local fatigue = types.Actor.stats.dynamic.fatigue(self)
     if fatigue then
-        fatigue.current = math.min(fatigue.current + FATIGUE_TICK_AMOUNT, fatigue.base)
+        local max = fatigue.base + fatigue.modifier
+        if fatigue.current < max then
+            fatigue.current = math.min(fatigue.current + FATIGUE_TICK_AMOUNT, max)
+        end
     end
 end, FATIGUE_TICK_RATE)
 
@@ -807,17 +797,20 @@ local function onSitAnimStart()
         playOneShot(seats.enterAnimFor(currentKind, currentSubType), 'enter', function()
             if not isSitting then return end
             replayCount, replayWindowStart = 0, core.getSimulationTime()
-            local idle = profileFor('idle')
-            anim.playBlended(self, currentSitAnim,
-                { loops = SIT_LOOPS, priority = idle.priority,
-                  blendMask = idle.blendMask })
+            playSitIdle()
             sitAnimStarted = true
         end)
     end)
 end
 
+-- A save made while seated keeps the chair's original placement so load can restore it.
 local function onSave()
-    return { controlsLocked = controlsLocked }
+    local chair = nil
+    if isSitting and currentFurniture and originalChairPos then
+        chair = { furniture = currentFurniture, position = originalChairPos,
+                  rotation = originalChairRot }
+    end
+    return { controlsLocked = controlsLocked, chair = chair }
 end
 
 local function onLoad(data)
@@ -831,6 +824,10 @@ local function onLoad(data)
         releaseControls()
     else
         controlsLocked = false
+    end
+    local chair = data and data.chair
+    if chair and chair.furniture and chair.furniture:isValid() then
+        core.sendGlobalEvent('SitRestoreChair', chair)
     end
 end
 

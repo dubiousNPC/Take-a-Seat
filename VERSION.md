@@ -1,3 +1,22 @@
+# Take a Seat v0.35
+
+## Fixes
+- **Seated pose replays used a different priority.** The first play used the seat idle profile (`Weapon`, full body). Replays after a perspective change, load, or loop end used a separate `Scripted` constant with no blend mask. All plays now use the idle profile; `SIT_PRIORITY` is gone.
+- **The pose restarted right after sitting.** AnimRefresh delivers once to a new subscriber, 0.1s after it joins, which landed just after the pose started and replayed it from frame 0. The refresh now re-issues only when `animation.isPlaying` says the pose was lost.
+- **Saving while seated left the chair moved.** The push that clears the chair from walls is undone on stand, but a save made while seated kept the moved position and the load forgot the original. `onSave` now stores it and `onLoad` restores it.
+- **Sitting lowered fortified fatigue.** The restore capped at `base`, so fatigue above base (Fortify Fatigue) was pulled down every second. It now caps at `base + modifier` and never lowers.
+- **Hiding the HUD blocked sitting and standing.** Activate was ignored while the HUD was toggled off. The gate now checks for an open menu instead.
+
+## Cleanup
+- Removed the unused `SitPushChair` / `SitChairReady` path, routine and commented-out prints, unused locals, and empty section headers.
+- Corrected the bed enter/exit table labels (clip names had been passed as the error label).
+- AnimRefresh v5 comments moved to `docs/animrefresh.md`; code unchanged, same file as FLOW's copy. `tools/__pycache__` removed.
+- New `README.md` with the shared-data API and design notes.
+
+Note: the v0.30 profile table below predates the current values. Current: seat idle/enter/exit `Weapon`, full body; misc idle `Weapon`, lower body.
+
+---
+
 # Take a Seat v0.34
 
 ## AnimRefresh v4 -> v5: the Rest/Travel refresh had never run
@@ -16,7 +35,7 @@ re-issued after resting.
 Fixed in `scripts/AnimRefresh/AnimRefresh_v5.lua`. The number moved because
 every mod bundles this file at one shared VFS path, so a corrected v4 and an
 uncorrected one are indistinguishable until install order picks one; the `>=`
-guard now settles it instead. Details in `ANIMREFRESH_V5.md`.
+guard now settles it instead. Details in `docs/animrefresh.md`.
 
 - Manifest line updated to the new filename.
 - `tools/test_animrefresh.lua` now asserts the wiring (it previously called
@@ -50,7 +69,7 @@ looping pose, and a second delivery would restart it from frame 0. That,
 plus v4 ignoring vanity, is what stops the sit pose twitching when the
 player idles in a chair and the camera drifts into vanity.
 
-Full reasoning, measurements and the subscriber contract: `ANIMREFRESH_V4.md`.
+Full reasoning and the subscriber contract: `docs/animrefresh.md` (v5 supersedes v4).
 Tested by `tools/test_animrefresh.lua` (19 checks) plus this mod's own suite.
 
 ---

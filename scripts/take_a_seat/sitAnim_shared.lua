@@ -1,34 +1,6 @@
 ---@omw-context runtime
---[[
-    sitAnim_shared.lua -- chair and animation profiles for Take a Seat
-
-    Data only. No engine handlers, no state, no camera or animation calls --
-    just the tables that say WHICH objects are seats, WHAT kind of seat they
-    are, and WHICH animation group each kind plays.
-
-    Split out of take_a_seat.lua so the profiles can be extended without
-    touching the controller, and so other mods can read the same lists.
-
-    OTHER MODS: require this file and read the exported tables. Nothing here
-    mutates, so it is safe to hold a reference:
-
-        local seats = require('scripts.take_a_seat.sitAnim_shared')
-        local kind  = seats.getSeatType(obj.recordId)   -- "bench" | nil
-        local group = kind and seats.SEAT_ANIM[kind]
-
-    ADDING SEATS
-      * A record from a plugin that may not be installed goes in
-        MOD_SEAT_DATABASE under that plugin's filename. It is merged in at
-        load only when the plugin is actually present, so an absent mod costs
-        nothing and cannot pollute the lookup.
-      * A vanilla record goes straight in BASE_SEATS.
-      * Anything not listed anywhere still gets caught by SEAT_TYPE_PATTERNS,
-        which is the fallback for third-party furniture nobody has profiled.
-
-    Exact record IDs always beat patterns. Record names lie: three vanilla
-    records are typed against their own names in the profile data this was
-    built from, and pattern matching alone gets all three wrong.
-]]
+-- Seat, bed and animation profiles. Data only; other mods may require it.
+-- See README.md for the lookup API and how to add seats.
 
 local core = require('openmw.core')
 
@@ -113,9 +85,9 @@ local function buildAnimProfiles(anim)
     return {
         [TARGET_KIND.SEAT] = {
             -- Whole body, and everything else held still.
-            idle  = { priority = P.Scripted, blendMask = B.All, loops = 0 },
-            enter = { priority = P.Weapon, blendMask = B.UpperBody, loops = 0 },
-            exit  = { priority = P.Weapon, blendMask = B.UpperBody, loops = 0 },
+            idle  = { priority = P.Weapon, blendMask = B.All, loops = 0 },
+            enter = { priority = P.Weapon, blendMask = B.All, loops = 0 },
+            exit  = { priority = P.Weapon, blendMask = B.All, loops = 0 },
         },
         [TARGET_KIND.BED] = {
             idle  = { priority = P.Scripted, blendMask = B.All, loops = 0 },
@@ -123,9 +95,9 @@ local function buildAnimProfiles(anim)
             exit  = { priority = P.Scripted, blendMask = B.All, loops = 0 },
         },
         [TARGET_KIND.MISC] = {
-            idle  = { priority = P.Weapon, blendMask = B.UpperBody, loops = 0 },
-            enter = { priority = P.Weapon, blendMask = B.UpperBody, loops = 0 },
-            exit  = { priority = P.Weapon, blendMask = B.UpperBody, loops = 0 },
+            idle  = { priority = P.Weapon, blendMask = B.LowerBody, loops = 0 },
+            enter = { priority = P.Weapon, blendMask = B.All, loops = 0 },
+            exit  = { priority = P.Weapon, blendMask = B.All, loops = 0 },
         },
     }
 end
@@ -156,11 +128,11 @@ local function resolveBedByName(byName, label)
 end
 
 local BED_ANIM = resolveBedByName({
-    SINGLE  = "slee8",
-    DOUBLE  = "slee8",
-    BUNK    = "slee8",
-    BEDROLL = "slee8",
-    HAMMOCK = "slee8",
+    SINGLE  = "sleepT1",
+    DOUBLE  = "sleepT2",
+    BUNK    = "sleepT5",
+    BEDROLL = "sleepT1",
+    HAMMOCK = "sleepT6",
 }, "BED_ANIM")
 
 local BED_ENTER_ANIM = resolveBedByName({}, "BED_ENTER_ANIM")

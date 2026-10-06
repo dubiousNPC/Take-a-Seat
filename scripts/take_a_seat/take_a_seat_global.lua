@@ -17,7 +17,6 @@ end
 
 local function onPlayerAdded(p)
     player = p
-    print("[sit-global] onPlayerAdded: player saved.")
 end
 
 local function onSitTeleport(eventData)
@@ -27,7 +26,6 @@ local function onSitTeleport(eventData)
             print("[sit-global] ERROR: player not found")
             return
         end
-        print("[sit-global] Player found via activeActors.")
     end
 
     if eventData.furniture and eventData.furniturePos then
@@ -35,16 +33,12 @@ local function onSitTeleport(eventData)
         local newPos = eventData.furniturePos
         local delta  = newPos - furn.position
         if math.sqrt(delta.x^2 + delta.y^2) > 0.5 then
-            print(string.format("[sit-global] Moving chair by (%.1f, %.1f)",
-                delta.x, delta.y))
             furn:teleport(furn.cell, newPos, { rotation = furn.rotation })
         end
     end
 
     local pos = eventData.position
     local yaw = eventData.yaw
---    print(string.format("[sit-global] Teleporting player to (%.1f, %.1f, %.1f)",
---        pos.x, pos.y, pos.z))
     player:teleport(player.cell, pos,
         { rotation = util.transform.rotateZ(yaw + math.pi) })
 
@@ -56,39 +50,12 @@ local function onSitRestoreChair(eventData)
     local pos       = eventData.position
     local rot       = eventData.rotation
 
-    if not furniture then
-        print("[sit-global] SitRestoreChair: furniture ref is nil")
+    if not (furniture and furniture:isValid()) then
+        print("[sit-global] SitRestoreChair: furniture ref is invalid")
         return
     end
 
     furniture:teleport(furniture.cell, pos, { rotation = rot })
-
---    print(string.format("[sit-global] Chair restored to (%.1f, %.1f, %.1f)",
---        pos.x, pos.y, pos.z))
-end
-
-local function onSitPushChair(eventData)
-    local furniture = eventData.furniture
-    local pos       = eventData.position
-
-    if not furniture then
-        print("[sit-global] SitPushChair: furniture ref is nil")
-        return
-    end
-
-    furniture:teleport(furniture.cell, pos, { rotation = furniture.rotation })
-
---    print(string.format("[sit-global] Chair moved to (%.1f, %.1f, %.1f)",
---        pos.x, pos.y, pos.z))
-
-    if player then
-        player:sendEvent('SitChairReady', {
-            furniture = furniture,
-            newPos    = pos,
-        })
-    else
-        print("[sit-global] SitPushChair: player ref lost")
-    end
 end
 
 return {
@@ -97,7 +64,6 @@ return {
     },
     eventHandlers = {
         SitTeleport     = onSitTeleport,
-        SitPushChair    = onSitPushChair,
         SitRestoreChair = onSitRestoreChair,
     }
 }
