@@ -139,7 +139,7 @@ local BED_ENTER_ANIM = resolveBedByName({}, "BED_ENTER_ANIM")
 local BED_EXIT_ANIM  = resolveBedByName({}, "BED_EXIT_ANIM")
 
 -- BEDS ARE OFF UNTIL THE CLIPS EXIST.
-local BEDS_ENABLED = false
+local BEDS_ENABLED = true
 
 -- ---------------------------------------------------------------------------
 -- MISCELLANEOUS ITEMS -- STUB
