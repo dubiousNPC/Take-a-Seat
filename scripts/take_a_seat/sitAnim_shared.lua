@@ -135,10 +135,9 @@ local BED_ANIM = resolveBedByName({
     HAMMOCK = "sleepT6",
 }, "BED_ANIM")
 
-local BED_ENTER_ANIM = resolveBedByName({}, "BED_ENTER_ANIM")
-local BED_EXIT_ANIM  = resolveBedByName({}, "BED_EXIT_ANIM")
+local BED_ENTER_ANIM = resolveBedByName({}, "sleepTE1")
+local BED_EXIT_ANIM  = resolveBedByName({}, "getup2")
 
--- BEDS ARE OFF UNTIL THE CLIPS EXIST.
 local BEDS_ENABLED = true
 
 -- ---------------------------------------------------------------------------
