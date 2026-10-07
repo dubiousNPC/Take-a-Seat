@@ -1,0 +1,20 @@
+blending_rules:
+  # Base: 0.2-0.4s.
+  - from: "*"
+    to: "*"
+    easing: "sineOut"
+    duration: 0.25
+
+  # Bottom-most rule wins.
+  - from: "*"
+    to: "rasit1: *"
+    easing: "sineOut"
+    duration: 0.17   # clip is 0.5s
+  - from: "*"
+    to: "rasitf: *"
+    easing: "sineOut"
+    duration: 0.22   # clip is 0.67s
+  - from: "*"
+    to: "rasitup1: *"
+    easing: "sineOut"
+    duration: 0.17   # clip is 0.5s
