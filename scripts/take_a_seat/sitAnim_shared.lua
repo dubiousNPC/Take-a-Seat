@@ -135,8 +135,8 @@ local BED_ANIM = resolveBedByName({
     HAMMOCK = "sleepT6",
 }, "BED_ANIM")
 
-local BED_ENTER_ANIM = resolveBedByName({}, "sleepTE1")
-local BED_EXIT_ANIM  = resolveBedByName({}, "getup2")
+local BED_ENTER_ANIM = resolveBedByName({}, "sleeptTE1")
+local BED_EXIT_ANIM  = resolveBedByName({}, "getup1")
 
 local BEDS_ENABLED = true
 
