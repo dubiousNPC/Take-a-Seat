@@ -63,9 +63,24 @@ local SEAT_ENTER_ANIM = resolveByType({
     -- THRONE       = "dbssit8_enter",
 }, "SEAT_ENTER_ANIM")
 
+-- No sit-DOWN clips ship: xdbssitting.kf, xSitting2.kf and xdbsRAsitting1.kf
+-- hold idles only, so enter stays empty and the player snaps into the pose.
+-- Stand-UP clips do ship -- getup1/getup2 in xdbsgetup01.kf and rasitup1 in
+-- xdbsRAsitting1.kf, on all four skeletons (tools/check_anims.py) -- and until
+-- now nothing played them.
+--
+-- rasitup1 belongs to the RA set, so it pairs with CUSHION, the one seat type
+-- whose idle (rasit6) comes from that set. Everything else takes getup1;
+-- getup2 is the alternative in the same file if getup1 reads wrong for a type.
 local SEAT_EXIT_ANIM = resolveByType({
-    -- BACKED_CHAIR = "dbssit5_exit",
-    -- THRONE       = "dbssit8_exit",
+    BACKED_CHAIR      = "getup1",
+    BENCH             = "getup1",
+    STOOL             = "getup1",
+    BARSTOOL          = "getup1",
+    SINGLE_SEAT_BENCH = "getup1",
+    CUSHION           = "rasitup1",
+    THRONE            = "getup1",
+    BATH              = "getup1",
 }, "SEAT_EXIT_ANIM")
 
 -- ---------------------------------------------------------------------------
@@ -81,23 +96,74 @@ local TARGET_KIND = {
 ---@param anim any the openmw.animation module, passed in so this file requires nothing
 ---@return table<string, table> profiles keyed by TARGET_KIND
 local function buildAnimProfiles(anim)
-    local P, B = anim.PRIORITY, anim.BLEND_MASK
+    local P, B, BG = anim.PRIORITY, anim.BLEND_MASK, anim.BONE_GROUP
+
+    -- `priority` takes either one value for every bone group or a table
+    -- mapping bone group to priority (openmw.animation.playBlended). Split it,
+    -- because the legs and the upper body want opposite things:
+    --
+    --   LEGS carry the pose. They must outrank what the engine plays by
+    --   itself -- Movement, Jump, Hit -- or the seated legs are replaced by a
+    --   walk cycle the moment anything nudges the player.
+    --
+    --   UPPER BODY should lose. A seated player still wants hit reactions, a
+    --   drawn weapon, a torch, and the conversation gestures other mods play
+    --   on the torso and arms. Procedural Chatter is the reference: it poses
+    --   seated NPCs at PRIORITY.Movement and then plays gestures on bone mask
+    --   14 (torso + both arms) at a higher priority, expecting the pose to
+    --   yield there. A pose held at one high priority across all four groups
+    --   blocks exactly that, which is what this mod did.
+    --
+    -- Bone groups left out of the table default to PRIORITY.Default, so all
+    -- four are always named.
+    local function split(legs, upper)
+        return {
+            [BG.LowerBody] = legs,
+            [BG.Torso]     = upper,
+            [BG.LeftArm]   = upper,
+            [BG.RightArm]  = upper,
+        }
+    end
+
+    -- Transitions outrank the idle on the legs: a stand-up is a leg movement
+    -- and it is competing with locomotion the instant controls come back.
+    -- Knockdown is the highest tier below Scripted, and Scripted is avoided
+    -- deliberately -- it pauses every animation on the actor that is not also
+    -- Scripted, which would freeze the very gestures the idle is making room
+    -- for (RESEARCH 3.2).
+    local TRANSITION_LEGS = P.Knockdown
+    local TRANSITION_UPPER = P.Weapon
+    local IDLE_LEGS = P.Weapon
+    local IDLE_UPPER = P.Movement
+
     return {
         [TARGET_KIND.SEAT] = {
-            -- Whole body, and everything else held still.
-            idle  = { priority = P.Weapon, blendMask = B.All, loops = 0 },
-            enter = { priority = P.Weapon, blendMask = B.All, loops = 0 },
-            exit  = { priority = P.Weapon, blendMask = B.All, loops = 0 },
+            idle  = { priority = split(IDLE_LEGS, IDLE_UPPER),
+                      blendMask = B.All, loops = 0 },
+            enter = { priority = split(TRANSITION_LEGS, TRANSITION_UPPER),
+                      blendMask = B.All, loops = 0 },
+            exit  = { priority = split(TRANSITION_LEGS, TRANSITION_UPPER),
+                      blendMask = B.All, loops = 0 },
         },
         [TARGET_KIND.BED] = {
+            -- Left at Scripted, which pauses every non-Scripted animation on
+            -- the actor. For sleeping that is the intent -- nothing else should
+            -- play over a prone body -- and no bed enter/exit clip is wired, so
+            -- the transition/idle split has nothing to act on yet. If gestures
+            -- while lying down are ever wanted, this block takes the same
+            -- split() treatment as the seat one above.
             idle  = { priority = P.Scripted, blendMask = B.All, loops = 0 },
             enter = { priority = P.Scripted, blendMask = B.All, loops = 0 },
             exit  = { priority = P.Scripted, blendMask = B.All, loops = 0 },
         },
         [TARGET_KIND.MISC] = {
-            idle  = { priority = P.Weapon, blendMask = B.LowerBody, loops = 0 },
-            enter = { priority = P.Weapon, blendMask = B.All, loops = 0 },
-            exit  = { priority = P.Weapon, blendMask = B.All, loops = 0 },
+            -- Already upper-body-free by mask, so only the legs need a value.
+            idle  = { priority = split(IDLE_LEGS, IDLE_UPPER),
+                      blendMask = B.LowerBody, loops = 0 },
+            enter = { priority = split(TRANSITION_LEGS, TRANSITION_UPPER),
+                      blendMask = B.All, loops = 0 },
+            exit  = { priority = split(TRANSITION_LEGS, TRANSITION_UPPER),
+                      blendMask = B.All, loops = 0 },
         },
     }
 end

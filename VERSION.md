@@ -1,3 +1,93 @@
+# Take a Seat v0.36
+
+## Menus could not be opened while seated
+
+`CONTROL_SWITCH.Controls` is vanilla's `DisablePlayerControls`, and in OpenMW it
+gates more than walking: the inventory, journal and quick keys are refused
+while it is off. The mod turned it off for the whole sit, so no menu would
+open. Nothing else it did could cause this -- the only other switch it touched
+was `Jumping`.
+
+The lock now uses `I.Controls.overrideMovementControls(true)`, which stops the
+engine processing movement (including jump and sneak) and leaves UI controls
+alone. The engine's own docs point the other way for the heavy case ("if
+movement should be disallowed completely, consider to use
+`types.Player.setControlSwitch` instead"), so the switch was the sledgehammer.
+`overrideCombatControls` is set alongside it to keep the old side effect that
+you cannot swing a weapon out of a chair. Activation is deliberately left to
+the engine -- the Activate trigger is what stands you up. If the Controls
+interface is missing, the old switches are used as a fallback.
+
+Caveat: these overrides are one global flag each, not reference counted, so a
+release clears any other mod's override too. The control switches had the same
+problem, so it is not a regression.
+
+## Animation priorities split between legs and upper body
+
+`priority` accepts a table mapping bone group to priority, and the legs and the
+upper body want opposite things:
+
+| | legs | torso + arms |
+|---|---|---|
+| seated idle | `Weapon` (7) | `Movement` (5) |
+| enter / exit | `Knockdown` (9) | `Weapon` (7) |
+
+- **Legs** must outrank what the engine plays by itself -- Movement, Jump, Hit
+  -- or a nudge replaces the seated legs with a walk cycle.
+- **The upper body must lose**, so hit reactions, a drawn weapon, a torch and
+  other mods' conversation gestures can take the torso and arms. Procedural
+  Chatter is the reference: it poses seated NPCs at `PRIORITY.Movement` and
+  plays gestures on bone mask 14 at a higher priority, expecting the pose to
+  yield there. One flat priority across all four groups blocked that.
+- **Transitions outrank the idle on the legs**, because a stand-up is a leg
+  movement competing with locomotion the instant controls return.
+- `PRIORITY.Scripted` is avoided in seat profiles: it pauses every
+  non-Scripted animation on the actor, which would freeze the very gestures
+  this split makes room for. Beds still use it, with a comment saying why.
+
+## Stand-up animations are now actually played
+
+`SEAT_EXIT_ANIM` was commented out, so the stand-up clips were never played
+even though they ship on all four skeletons: `getup1`/`getup2`
+(`xdbsgetup01.kf`) and `rasitup1` (`xdbsRAsitting1.kf`). Every seat type now
+exits with `getup1`, except `CUSHION`, whose idle (`rasit6`) comes from the RA
+set, so it exits with `rasitup1`. `getup2` is the alternative in the same file
+if `getup1` reads wrong for a type.
+
+Enter stays unwired: no shipped `.kf` contains a sit-DOWN clip, and naming a
+group that does not exist attaches nothing silently.
+
+**Sequencing fix that follows from it.** `stopSitting` released controls before
+the exit clip played. With the clip now playing at a transition priority that
+outranks locomotion, returning input first would move the player while the
+stand-up animates -- sliding out of the chair. Controls are released in the
+one-shot's callback instead, which runs immediately when there is no clip, on
+the clip ending, or on its 1s backstop.
+
+## Positioning data synced with Procedural Chatter
+
+`sdp/chairProfiles.txt` and `sdp/chairProfileVariants.txt` updated from the
+Procedural Chatter "Sitting and Sleeping Fixed" build (6 rows changed).
+Regenerating `furniture_profiles.lua` produces identical data: the generator
+reads `RecordID`, `SeatType` and `FinalZOffset`, and the update touched
+`YawOffset`, `DepthOffset` and `HeightOffset` -- columns this mod does not use.
+See `docs/positioning.md` for what that means and what adopting them would
+take.
+
+## Tests
+
+- `tools/test_priorities.lua` -- 24 checks on the per-bone priorities and the
+  exit wiring. 10 fail on v0.35.
+- `tools/test_controls.lua` -- 14 checks that the lock overrides movement and
+  combat and never touches `CONTROL_SWITCH.Controls` when the interface exists,
+  plus the fallback path. Cannot even extract the functions from v0.35.
+
+Sweep clean: luacheck 6/6, check_load 6/6, globalcheck 0, ctxcheck 0,
+check_handlers 0, check_manifest 0, check_anims 0 unplayable,
+`test_animrefresh` and `test_oneshot` pass.
+
+---
+
 # Take a Seat v0.35
 
 ## Fixes

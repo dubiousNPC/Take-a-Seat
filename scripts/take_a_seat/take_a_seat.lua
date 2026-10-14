@@ -462,17 +462,52 @@ end
 -- CONTROL LOCK
 -- ---------------------------------------------------------------------------
 
+-- CONTROL_SWITCH.Controls is the vanilla DisablePlayerControls gate, and it
+-- covers more than walking: OpenMW refuses the inventory, the journal and the
+-- quick keys while it is off. That is why no menu could be opened while
+-- seated. Nothing else this mod did could cause it -- the only other switch it
+-- touched was Jumping.
+--
+-- I.Controls.overrideMovementControls stops the engine processing movement
+-- (including jump and sneak) and leaves the UI controls alone. The engine's own
+-- documentation points the other way for the heavy case: "if movement should be
+-- disallowed completely, consider to use types.Player.setControlSwitch
+-- instead" -- so the switch is the sledgehammer and this is the tool.
+--
+-- Combat is overridden alongside it to keep the old behaviour: the Controls
+-- switch blocked attacking as a side effect, and swinging a weapon out of a
+-- seated pose was never intended. Activation is deliberately NOT overridden --
+-- the Activate trigger is what stands the player up.
+--
+-- One caveat worth knowing: these overrides are a single global flag each, not
+-- reference counted. If another mod overrides movement at the same time, the
+-- release below clears its override too. The control switches had the same
+-- problem, so this is not a regression, but it is a reason to release only on
+-- the paths that locked.
+local function setControlLock(on)
+    if I.Controls and I.Controls.overrideMovementControls then
+        I.Controls.overrideMovementControls(on)
+        if I.Controls.overrideCombatControls then
+            I.Controls.overrideCombatControls(on)
+        end
+    else
+        -- No Controls interface (built-in player scripts stripped or an older
+        -- build). Fall back to the switch, menus and all: being unable to walk
+        -- out of the chair matters more than being able to open a bag.
+        types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.Controls, not on)
+        types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.Jumping, not on)
+    end
+end
+
 local function lockControls()
     if controlsLocked then return end
-    types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.Controls, false)
-    types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.Jumping, false)
+    setControlLock(true)
     controlsLocked = true
 end
 
 local function releaseControls()
     if not controlsLocked then return end
-    types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.Controls, true)
-    types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.Jumping, true)
+    setControlLock(false)
     controlsLocked = false
 end
 
@@ -718,7 +753,12 @@ local function stopSitting()
     abortResolve()
     self.object:sendEvent('TakeASeat_Stood', {})
 
-    releaseControls()
+    -- NOT released here. The exit clip holds the legs at a transition priority
+    -- that outranks locomotion, so input returned now would move the player
+    -- while the stand-up still plays -- sliding out of the chair. Released in
+    -- the one-shot's callback below instead, which playOneShot guarantees runs:
+    -- immediately when there is no exit clip, on the clip ending, or on its
+    -- 1s backstop if the clip never reports an end.
     unsubscribeRefresh()
     clearCameraOffset()
     self.object:sendEvent('FPV_SetEyeDropOverride', { offset = 0 })
@@ -732,8 +772,7 @@ local function stopSitting()
     end
     currentFurniture, originalChairPos, originalChairRot = nil, nil, nil
 
-    -- Played last, and nothing waits on it.
-    playOneShot(exitGroup, 'exit', function() end)
+    playOneShot(exitGroup, 'exit', releaseControls)
     currentKind, currentSubType = nil, nil
 end
 

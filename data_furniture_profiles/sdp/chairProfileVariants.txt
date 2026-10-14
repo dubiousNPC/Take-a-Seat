@@ -36,8 +36,8 @@ t_nor_furnm_chair_01	meshes/sky/f/sky_furn_n_m_chair_01.nif	t_nor_furnm_chair_01
 t_nor_furnm_chair_01	meshes/sky/f/sky_furn_n_m_chair_01.nif	t_nor_furnm_chair_01	default	270	0	10	-20	-180	Karthwasten yaw-270 nord chair correction from 3.3.6 export
 t_nor_furnm_chair_02	meshes/sky/f/sky_furn_n_m_chair_02.nif	t_nor_furnm_chair_02	default	90	0	10	-20	-180	Karthwasten yaw-90 nord chair variant from 3.3.6 export
 t_nor_furnm_chair_03	meshes/sky/f/sky_furn_n_m_chair_03.nif	t_nor_furnm_chair_03	default	90	0	10	-20	-180	Karthwasten yaw-90 nord chair variant from 3.3.6 export
-t_imp_furnm_chair01green	meshes/pc/f/pc_f_com_m_chair_green.nif	t_imp_furnm_chair01green	default	0	0	-10	-40	-180	Anvil All Flags Inn yaw-0 green PC chair correction from 3.3.6 export
-t_imp_furnm_chair01green	meshes/pc/f/pc_f_com_m_chair_green.nif	t_imp_furnm_chair01green	default	90	0	-7	-35	-180	Anvil All Flags Inn yaw-90 green PC chair correction from 3.3.6 export
+t_imp_furnm_chair01green	meshes/pc/f/pc_f_com_m_chair_green.nif	t_imp_furnm_chair01green	default	0	0	5	4	-180	Use the same seating offsets as the working brown chair (yaw 0).
+t_imp_furnm_chair01green	meshes/pc/f/pc_f_com_m_chair_green.nif	t_imp_furnm_chair01green	default	90	0	5	4	-180	Use the same seating offsets as the working brown chair (yaw 90).
 t_imp_furnr_chair_05	meshes/tr/f/tr_furn_com_chair_05.nif	t_imp_furnr_chair_05	default		0	0	0	-180	Firewatch Grand Chapel of Akatosh placement-specific low-seat correction; same model/record sits normally elsewhere, so scope by object position.			-691.148	612.614	396.952
 t_imp_furnr_chair_05	meshes/tr/f/tr_furn_com_chair_05.nif	t_imp_furnr_chair_05	default		0	0	0	-180	TR Imperial chair placement-specific low-seat correction; same model/record sits normally elsewhere, so scope by object position.			-388	876	118.096
 t_imp_furnr_chair_02	meshes/tr/f/tr_furn_com_chair_02.nif	t_imp_furnr_chair_02	default	90	0	2	0	-180	Old Ebonheart Guild of Fighters yaw-90 TR Imperial chair correction from intentional Ken print; matches tightened base depth.
