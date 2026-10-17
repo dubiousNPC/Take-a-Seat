@@ -3,6 +3,8 @@
 Sit on furniture in OpenMW. Look at a seat and press Activate to sit; press Activate again to stand.
 
 ## Requirements
+**REQUIRES AnimRefresh_V6**
+
 OpenMW 0.49+. `scripts/SharedRay/SharedRay_v2.lua` and `scripts/AnimRefresh/AnimRefresh_v5.lua` are bundled shared services and version-guard themselves.
 
 ## Settings

@@ -135,6 +135,10 @@ local function buildAnimProfiles(anim)
     local TRANSITION_UPPER = P.Weapon
     local IDLE_LEGS = P.Weapon
     local IDLE_UPPER = P.Movement
+    -- A prone body's legs must never walk, so they stay at the top; the upper
+    -- body matches the seat idle so hits, weapons and torches still read.
+    local BED_LEGS = P.Scripted
+    local BED_UPPER = P.Movement
 
     return {
         [TARGET_KIND.SEAT] = {
@@ -146,15 +150,28 @@ local function buildAnimProfiles(anim)
                       blendMask = B.All, loops = 0 },
         },
         [TARGET_KIND.BED] = {
-            -- Left at Scripted, which pauses every non-Scripted animation on
-            -- the actor. For sleeping that is the intent -- nothing else should
-            -- play over a prone body -- and no bed enter/exit clip is wired, so
-            -- the transition/idle split has nothing to act on yet. If gestures
-            -- while lying down are ever wanted, this block takes the same
-            -- split() treatment as the seat one above.
-            idle  = { priority = P.Scripted, blendMask = B.All, loops = 0 },
-            enter = { priority = P.Scripted, blendMask = B.All, loops = 0 },
-            exit  = { priority = P.Scripted, blendMask = B.All, loops = 0 },
+            -- Was uniform Scripted, on the belief that Scripted "pauses every
+            -- non-Scripted animation". It does not: that suppression comes from
+            -- Animation::mPlayScriptedOnly, which the engine sets only from the
+            -- MWScript anim queue (character.cpp:1951), never from a playBlended
+            -- priority. Scripted is just the highest number.
+            --
+            -- Worse, a uniform priority is DELETED by any animation sharing it
+            -- (animation.cpp:905-911), and the engine plays "containeropen" and
+            -- "containerclose" at uniform Scripted over the whole body
+            -- (character.cpp:550, :570) -- so opening a container while in bed
+            -- removed the bed pose outright.
+            --
+            -- Split like the seat, which also lets a torch through. The legs stay
+            -- at Scripted so nothing walks a prone body, and keeping Scripted in
+            -- one group means the pose still survives mPlayScriptedOnly filtering
+            -- if an MWScript animation does play.
+            idle  = { priority = split(BED_LEGS, BED_UPPER),
+                      blendMask = B.All, loops = 0 },
+            enter = { priority = split(BED_LEGS, BED_UPPER),
+                      blendMask = B.All, loops = 0 },
+            exit  = { priority = split(BED_LEGS, BED_UPPER),
+                      blendMask = B.All, loops = 0 },
         },
         [TARGET_KIND.MISC] = {
             -- Already upper-body-free by mask, so only the legs need a value.
