@@ -1,0 +1,24 @@
+blending_rules:
+  # Base: 0.2-0.4s.
+  - from: "*"
+    to: "*"
+    easing: "sineOut"
+    duration: 0.25
+
+  # Bottom-most rule wins.
+  - from: "*"
+    to: "rasitd1: *"
+    easing: "sineOut"
+    duration: 0.17
+  - from: "*"
+    to: "rasitu1: *"
+    easing: "sineOut"
+    duration: 0.17
+  - from: "*"
+    to: "rasitd2: *"
+    easing: "sineOut"
+    duration: 0.17
+  - from: "*"
+    to: "rasitu2: *"
+    easing: "sineOut"
+    duration: 0.17    
