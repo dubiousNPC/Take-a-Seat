@@ -109,6 +109,36 @@ local CHAIR_PUSH_PROBE_ZS    = { -10, 35, 80 }
 
 local SIT_ANIM_WINDOW    = 0.05
 
+-- OVERHEAD CLEARANCE (chairs tucked under tables)
+-- The player's collision capsule keeps its standing height while seated, so a
+-- seat under a table top leaves the capsule intersecting the table and the
+-- engine resolves that by pushing the player UP -- out of the chair, knees
+-- above the table. The chair push stage cannot fix it: it is capped at
+-- CHAIR_PUSH_MAX_MOVE (22) and a tucked-in chair needs more than that to clear
+-- a table, and pushing world furniture further is the more invasive repair.
+--
+-- So the player is moved out from under the obstruction instead, along the
+-- chair's own backward axis where possible, which keeps them seated at the
+-- table rather than on it.
+-- An actor already on the seat. Checked against the furniture's own origin, so
+-- it does not depend on the resolve stages having run.
+local SEAT_OCCUPIED_RADIUS = 30
+local SEAT_OCCUPIED_Z      = 90
+
+local OVERHEAD_CLEARANCE   = 115   -- standing capsule height to keep free
+local OVERHEAD_RING_RADII  = { 18, 30, 42 }
+local OVERHEAD_RING_COUNT  = 8
+
+---True for anything that can be talked to, pickpocketed or attacked.
+---@param obj any
+local function isActorObject(obj)
+    if not obj or not obj.recordId then return false end
+    local t = types
+    return (t.NPC and t.NPC.objectIsInstance and t.NPC.objectIsInstance(obj))
+        or (t.Creature and t.Creature.objectIsInstance and t.Creature.objectIsInstance(obj))
+        or false
+end
+
 local function getObjectYaw(obj)
     local forward = obj.rotation:apply(util.vector3(0, 1, 0))
     return math.atan2(forward.x, forward.y)
@@ -140,7 +170,12 @@ local function castPiercing(from, to, maxPierces, onHit, done)
         left = left - 1
         nearby.asyncCastRenderingRay(async:callback(function(res)
             if not res or not res.hit then return done(nil) end
-            if onHit(res) then return done(res) end
+            -- Three verdicts, not two: 'stop' ends the column without a
+            -- result. Piercing everything that is not sittable is what let a
+            -- ray travel through an NPC and pick the chair behind them.
+            local verdict = onHit(res)
+            if verdict == 'stop' then return done(nil) end
+            if verdict then return done(res) end
             local dir = to - current
             local len = dir:length()
             if len < 1 then return done(nil) end
@@ -192,18 +227,43 @@ end
 -- TARGETING
 -- ---------------------------------------------------------------------------
 
+---@return any furniture, boolean blocked
 local function tryFurnitureFastPath()
-    if not (I.SharedRay and I.SharedRay.get) then return nil end
+    if not (I.SharedRay and I.SharedRay.get) then return nil, false end
     local result = I.SharedRay.get()
-    if not result or not result.hit then return nil end
+    if not result or not result.hit then return nil, false end
     local obj = result.hitObject
-    if not obj or not obj:isValid() then return nil end
-    if not isSittable(obj.recordId) then return nil end
-    return obj
+    if not obj or not obj:isValid() then return nil, false end
+    -- Looking at an actor means the player wants the actor, not the chair it is
+    -- sitting on. Blocked, not just "no furniture here": falling through to the
+    -- piercing search would find the chair behind them anyway.
+    if isActorObject(obj) then return nil, true end
+    if not isSittable(obj.recordId) then return nil, false end
+    return obj, false
+end
+
+---True when another actor is standing or sitting on this piece of furniture.
+---Sitting down on top of a seated NPC put the player inside them and was the
+---other half of why those NPCs could not be talked to.
+---@param furniture any
+local function seatOccupied(furniture)
+    local fp = furniture.position
+    for _, actor in ipairs(nearby.actors) do
+        if actor.id ~= self.id and actor:isValid() then
+            local ap = actor.position
+            local dx, dy = ap.x - fp.x, ap.y - fp.y
+            if (dx * dx + dy * dy) <= SEAT_OCCUPIED_RADIUS * SEAT_OCCUPIED_RADIUS
+               and math.abs(ap.z - fp.z) <= SEAT_OCCUPIED_Z then
+                return true
+            end
+        end
+    end
+    return false
 end
 
 local function findFurnitureAsync(done)
-    local fast = tryFurnitureFastPath()
+    local fast, blocked = tryFurnitureFastPath()
+    if blocked then return done(nil) end
     if fast then return done(fast) end
 
     local yaw     = camera.getYaw()
@@ -231,6 +291,10 @@ local function findFurnitureAsync(done)
     local found = {}
     forEachAsync(probes, function(probe, index, finished)
         castPiercing(probe[1], probe[2], MAX_PIERCES, function(res)
+            -- An actor ends this column. Without it the ray pierced a seated
+            -- NPC and returned the chair underneath them, so activating the
+            -- NPC sat the player down instead of opening dialogue.
+            if isActorObject(res.hitObject) then return 'stop' end
             return res.hitObject ~= nil and isSittable(res.hitObject.recordId)
         end, function(res)
             if res and res.hitObject then found[index] = res.hitObject end
@@ -417,6 +481,100 @@ local function computeSeatZ(chairPos, furniture, token, done)
             if token ~= resolveToken then return end
             if blockZ and fallbackZ >= blockZ - 2 then fallbackZ = blockZ - 28 end
             done(fallbackZ)
+        end)
+    end)
+end
+
+-- ---------------------------------------------------------------------------
+-- RESOLVE STAGE 2b -- get out from under a table top
+-- ---------------------------------------------------------------------------
+
+---Candidate escape offsets, nearest first, and among equals the one closest to
+---straight back from the seat. Pure so the ordering can be tested without rays.
+---@param backYaw number yaw of the direction to prefer (the chair's back)
+---@return table list of { dx = number, dy = number, r = number }
+local function overheadCandidates(backYaw)
+    local out = {}
+    for _, r in ipairs(OVERHEAD_RING_RADII) do
+        local ring = {}
+        for i = 0, OVERHEAD_RING_COUNT - 1 do
+            local angle = backYaw + (i / OVERHEAD_RING_COUNT) * (2 * math.pi)
+            -- Signed angular distance from the preferred direction, folded to
+            -- [0, pi], so "straight back" sorts first and the two sideways
+            -- directions tie before anything that moves toward the table.
+            local delta = (i / OVERHEAD_RING_COUNT) * (2 * math.pi)
+            if delta > math.pi then delta = 2 * math.pi - delta end
+            ring[#ring + 1] = { dx = math.sin(angle) * r, dy = math.cos(angle) * r,
+                                r = r, delta = delta }
+        end
+        table.sort(ring, function(a, b) return a.delta < b.delta end)
+        for _, c in ipairs(ring) do out[#out + 1] = c end
+    end
+    return out
+end
+
+---Offset to apply so the standing capsule is not inside a table top.
+---
+---Every probe goes out in ONE batch, not a ring at a time: each async ray is a
+---round-trip, the whole resolve chain is already several deep, and it is capped
+---by RESOLVE_TIMEOUT. Walking 24 candidates serially could spend ~50
+---round-trips and lose the race, leaving a press of Activate doing nothing.
+---This costs three: the check above the seat, the ring, and one reachability
+---ray for the winner.
+---@param facingYaw number the yaw the SEATED player looks along
+local function clearOverhead(sitPos, furniture, facingYaw, done)
+    local NONE = util.vector3(0, 0, 0)
+    local function upRay(x, y)
+        return { util.vector3(x, y, sitPos.z + 4),
+                 util.vector3(x, y, sitPos.z + OVERHEAD_CLEARANCE) }
+    end
+    local function blocked(res)
+        return res ~= nil and res.hit and res.hitObject ~= furniture
+    end
+
+    castBatch({ upRay(sitPos.x, sitPos.y) }, function(seatRes)
+        if not blocked(seatRes[1]) then return done(NONE) end
+
+        -- Away from where the player is looking. A chair at a table faces the
+        -- table, so this is out from under it.
+        local candidates = overheadCandidates(facingYaw + math.pi)
+        local rays = {}
+        for i, c in ipairs(candidates) do
+            rays[i] = upRay(sitPos.x + c.dx, sitPos.y + c.dy)
+        end
+
+        castBatch(rays, function(results)
+            for i, c in ipairs(candidates) do
+                if not blocked(results[i]) then
+                    -- The escape has to be reachable: clear ceiling on the far
+                    -- side of a wall is no use.
+                    local cx, cy = sitPos.x + c.dx, sitPos.y + c.dy
+                    return castBatch({ { sitPos, util.vector3(cx, cy, sitPos.z) } },
+                        function(reach)
+                            if blocked(reach[1]) then
+                                -- Only the nearest clear candidate is reach-tested;
+                                -- trying them all would put the round-trip count
+                                -- back where this batching removed it. A blocked
+                                -- path falls through to sitting in place, which is
+                                -- the old behaviour.
+                                if DEBUG then
+                                    print("[sit] overhead escape blocked by geometry")
+                                end
+                                return done(NONE)
+                            end
+                            done(util.vector3(c.dx, c.dy, 0))
+                        end)
+                end
+            end
+            -- Nothing in the ring is clear. Sit anyway rather than refusing --
+            -- the player can always stand up -- but say so, because this is the
+            -- case that looks like the original bug.
+            if DEBUG then
+                print("[sit] no overhead clearance within " ..
+                      tostring(OVERHEAD_RING_RADII[#OVERHEAD_RING_RADII]) ..
+                      " units; the table may still push the player up")
+            end
+            done(NONE)
         end)
     end)
 end
@@ -658,9 +816,22 @@ local function onPerspectiveChanged()
     playSitIdle()
 end
 
+-- AnimRefresh is not bundled with this mod any more (docs/animrefresh.md), so
+-- it arrives from whichever installed mod ships AnimRefresh_v5.lua. If none
+-- does, the sit pose is dropped whenever the engine rebuilds the player model
+-- and nothing re-issues it. That is a silent loss of the mod's main effect, so
+-- say it once -- the same shape Bardcraft uses for the same dependency.
+local animRefreshWarned = false
+
 local function subscribeRefresh()
     if I.AnimRefresh and I.AnimRefresh.subscribe then
         I.AnimRefresh.subscribe("SitOnFurniture", onPerspectiveChanged)
+    elseif not animRefreshWarned then
+        animRefreshWarned = true
+        print('[take a seat] AnimRefresh interface not found; the sit pose will '
+            .. 'not be restored after a perspective change, Rest, Travel or a '
+            .. 'game load. Install a mod that ships '
+            .. 'scripts/AnimRefresh/AnimRefresh_v5.lua.')
     end
 end
 
@@ -708,6 +879,10 @@ end
 
 local function beginSit(furniture)
     if not furniture or not furniture:isValid() then return end
+    if seatOccupied(furniture) then
+        if DEBUG then print("[sit] that seat is taken") end
+        return
+    end
 
     abortResolve()                    -- invalidate anything still in flight
     local token = resolveToken
@@ -736,7 +911,16 @@ local function beginSit(furniture)
                 local sitPos = basePos + offset
                 local yaw    = getObjectYaw(furniture)
 
-                commitSit(furniture, chairPos, sitPos, yaw)
+                -- take_a_seat_global.lua teleports the player with
+                -- rotateZ(yaw + math.pi), so a seated player looks along
+                -- yaw + pi, NOT along the chair's own forward. Getting this
+                -- backwards would push them further under the table.
+                local facingYaw = yaw + math.pi
+                clearOverhead(sitPos, furniture, facingYaw, function(escape)
+                    if token ~= resolveToken then return end
+                    if not furniture:isValid() then return abortResolve() end
+                    commitSit(furniture, chairPos, sitPos + escape, yaw)
+                end)
             end)
         end)
     end)

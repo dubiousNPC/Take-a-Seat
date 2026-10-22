@@ -1,3 +1,104 @@
+# Take a Seat v0.37
+
+## Activating a seated NPC sat the player on their chair
+
+The furniture search **pierces** anything that is not sittable, so a ray went
+straight through an NPC and returned the chair underneath them. Looking at a
+seated NPC therefore found furniture, the mod sat the player down on top of
+them, and the NPC could never be talked to.
+
+Three changes:
+
+- `castPiercing` gained a third verdict. `onHit` may now return `'stop'`, which
+  ends that column without a result, instead of only accept/pierce.
+- The furniture filter returns `'stop'` for an actor. An NPC between the player
+  and a chair now blocks that line of sight entirely, so no furniture is found
+  and the activation reaches the NPC.
+- The SharedRay fast path reports `blocked` when the crosshair is on an actor,
+  so the slower piercing search is not run as a fallback and cannot find the
+  chair behind them.
+
+Also added: `seatOccupied`. An actor within 30 units horizontally and 90
+vertically of the furniture's origin means the seat is taken, and `beginSit`
+refuses. Sitting into a seated NPC was the other half of why they could not be
+reached.
+
+## A chair at a table left the player floating with knees above the table
+
+The player's collision capsule keeps its standing height while seated, so a
+seat under a table top leaves the capsule intersecting the table and the engine
+resolves that the only way it can: it pushes the player **up**, out of the
+chair and onto the table.
+
+The chair-push stage cannot fix this. It is capped at `CHAIR_PUSH_MAX_MOVE`
+(22 units) and a tucked-in chair needs more than that to clear a table, and
+shoving world furniture further is the more invasive repair.
+
+New resolve stage `clearOverhead`, between the wall push and the commit:
+
+- Cast up from the seat through `OVERHEAD_CLEARANCE` (115, a standing actor).
+  Nothing there, no change -- the common case costs one ray.
+- Blocked: try a ring of escapes (radii 18/30/42, eight directions), ordered
+  nearest first and, within a radius, closest to **straight back from where the
+  seated player looks**. A chair at a table faces the table, so that is out
+  from under it.
+- The winner is reach-tested with one horizontal ray, so a clear ceiling behind
+  a wall is not chosen.
+- Nothing clear in the ring: sit anyway and log under `DEBUG`. Refusing to sit
+  would be worse, and the log names the case that still looks like the old bug.
+
+All probes go out in **one batch**. Walking 24 candidates serially would cost
+~50 async round-trips and could lose the race against `RESOLVE_TIMEOUT`,
+leaving a press of Activate doing nothing. This costs three round-trips.
+
+The facing is taken from the global script, not the chair: `take_a_seat_global`
+teleports the player with `rotateZ(yaw + math.pi)`, so a seated player looks
+along `yaw + pi`. Reading the chair's own forward instead would have pushed the
+player **further under** the table. A test pins both halves of that
+relationship so they cannot drift apart.
+
+## AnimRefresh is no longer bundled, and nothing said so
+
+`scripts/AnimRefresh/AnimRefresh_v5.lua` is gone from the package and its
+manifest line with it, while the manifest comment still claimed "Both are
+bundled" and `tools/test_animrefresh.lua` still tried to load the file and
+errored.
+
+AnimRefresh is what re-issues the sit pose after the engine rebuilds the player
+model -- a perspective switch, Rest, Travel, a game load. Without it the pose is
+simply lost on those events. In this suite that is fine, because CAKE, DED and
+WhyWalk all ship `AnimRefresh_v5.lua` and the version guard resolves it, but a
+standalone install of Take a Seat silently loses the mod's main effect.
+
+- `subscribeRefresh` now logs once when the interface is absent, naming the file
+  to install. Same shape Bardcraft uses for the same dependency.
+- The manifest comment says what is bundled and what is expected from the load
+  order.
+- `tools/test_animrefresh.lua` skips with a reason instead of erroring, so a
+  sweep of this mod stays readable and the contract test still runs for whoever
+  does ship the file.
+
+## Tests
+
+`tools/test_targeting.lua`, 22 checks: actor recognition, a ray through an NPC
+finding nothing while the same chair is still found without them, clutter still
+being pierced, seat occupancy including the player not blocking their own seat,
+the escape-ring ordering under rotation, the clearance height, and the facing
+relationship with the global script. None of it can run against v0.36 -- the
+functions do not exist there.
+
+Suite: luacheck 5/5, check_load 5/5, globalcheck 0, check_handlers 0,
+check_anims 0 unplayable, check_manifest 0, and `test_oneshot`,
+`test_priorities`, `test_controls` all pass.
+
+Not run: `api_sweep.py` and `ctxcheck.py`, which need the Cod3x 0.4 stubs. They
+were not available in this session. The new code calls only what this file
+already used -- `nearby.actors`, `nearby.asyncCastRenderingRay`,
+`types.NPC/Creature.objectIsInstance` -- so re-running them is worth doing but
+nothing in the diff is a new API surface.
+
+---
+
 # Take a Seat v0.36
 
 ## Menus could not be opened while seated
