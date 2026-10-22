@@ -1,3 +1,83 @@
+# Take a Seat v0.38
+
+## Sit-down and stand-up transitions wired to the new clips
+
+`xdbsTASsitT*.kf` installed on all six skeleton folders (base, .1st, female,
+female.1st, kna, kna.1st) and wired as the seat enter/exit one-shots.
+
+**The group names are `tassitd1/2` (down) and `tassitu1/2` (up) -- double s.**
+The handover note spelled them `tasistd1/2` and `tasitu1/2`; neither exists in
+any of the three files. A group name the `.kf` does not define plays nothing
+and reports nothing, so these were read out of the binaries. `check_anims.py`
+now reports all four as present on all six skeletons.
+
+Variant 1 is used everywhere; variant 2 is the authored alternative in the same
+file. CUSHION is the exception at both ends -- it is floor sitting, posed from
+the RA set, so it keeps `rasitup1` for standing and has no chair sit-down.
+
+This replaces the `getup1` exit wired in v0.36. `getup1`/`getup2` (now in
+`xdbsWakeUp*.kf`) are no longer referenced by anything, and
+`xbase_animkna/xdbsgetup01.kf` duplicates the same two groups the beast
+skeleton already gets from `xdbsWakeUpkna.kf` -- both are dead weight unless
+beds get their transitions wired.
+
+## The one-shot backstop was racing the new clips
+
+`ONE_SHOT_TIMEOUT` was 1.0s. Measured from the text keys in the new file:
+`tassitd1` 1.000s, `tassitd2` 0.967s, `tassitu1` 1.033s, `tassitu2` 1.033s.
+
+That backstop exists for a clip that never reports an end, but the seated idle
+waits on it and the exit releases controls on it, so at 1.0s it fired a hair
+*before* the stand-up finished -- cutting the pose in and returning input
+early. Now 1.5s, with the measurements in the comment and a check in
+`test_oneshot.lua` so a future clip longer than the backstop is caught.
+
+## Blending configs for the new clips
+
+Every other clip in this mod ships a `.yaml` blending rule; the new ones did
+not, so they would cut in hard while everything else eases. Added the same base
+rule the other files use (`sineOut`, 0.25s) for all six copies. The comment
+records the measured clip lengths and what a per-clip override at about a third
+of length would be, which is the pattern `xdbsRAsitting1.yaml` follows -- that
+tuning is a judgement call and was left alone.
+
+## AnimRefresh v6 shipped without being registered
+
+`scripts/AnimRefresh/AnimRefresh_v6.lua` was added back to the package, but
+`take_a_seat.omwscripts` had no line for it -- the manifest still carried the
+v0.37 comment saying AnimRefresh was *not* bundled. A script file that is not
+registered is shipped and never loaded, so the sit pose would still be dropped
+on every perspective change, Rest, Travel and game load with the file sitting
+right there in the mod.
+
+- Registered as `PLAYER: scripts/AnimRefresh/AnimRefresh_v6.lua`, before the
+  mod's own player script.
+- Manifest comment corrected.
+- The absent-interface warning no longer names a specific version; it points at
+  the registration instead, which is the thing that was actually wrong.
+- `tools/test_animrefresh.lua` now finds whichever `AnimRefresh_v*.lua` is
+  bundled rather than hardcoding v5, and asserts version >= 5. Hardcoded, it
+  reported SKIP while a testable v6 sat beside it.
+
+v6's own wiring checks out: `UiModeChanged` is in `eventHandlers`, and
+`check_handlers.py` passes over all 12 handler and event keys.
+
+## Checks
+
+With the Cod3x 0.4 stubs restored, the two that could not run for v0.37 now do:
+
+luacheck 6/6, check_load 6/6, globalcheck 0, check_handlers 0 (12 keys),
+**ctxcheck 0 issues**, **api_sweep 10 items, all known false positives**
+(inherited `self.id`/`self.position`, and the two bundled interfaces that have
+no Cod3x stub), check_manifest 0, check_anims 0 unplayable across all six
+skeletons. All five test files pass.
+
+One standing gap, unchanged and unplayed: `sleepte1`-`sleepte6` are missing
+from the three `.1st` folders. Nothing plays them -- bed enter is not wired --
+so it costs nothing today.
+
+---
+
 # Take a Seat v0.37
 
 ## Activating a seated NPC sat the player on their chair

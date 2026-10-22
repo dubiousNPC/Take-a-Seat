@@ -27,8 +27,15 @@ local DEBUG = false
 
 local SIT_LOOPS    = 999
 
--- Longest an enter/exit one-shot is allowed to hold up the sit.
-local ONE_SHOT_TIMEOUT = 1.0
+-- Longest an enter/exit one-shot is allowed to hold up the sit. It is a
+-- BACKSTOP for a clip that never reports an end, so it has to outlast the
+-- real clips or it races them: the seated idle waits on this, and the exit
+-- releases controls on it.
+--
+-- Measured out of the text keys in xdbsTASsitT.kf: tassitd1 1.000s,
+-- tassitd2 0.967s, tassitu1 1.033s, tassitu2 1.033s. At the old 1.0s this
+-- fired a hair BEFORE the stand-up finished.
+local ONE_SHOT_TIMEOUT = 1.5
 
 -- Per-target-kind priority and blend masks
 local ANIM_PROFILES = seats.buildAnimProfiles(anim)
@@ -816,11 +823,12 @@ local function onPerspectiveChanged()
     playSitIdle()
 end
 
--- AnimRefresh is not bundled with this mod any more (docs/animrefresh.md), so
--- it arrives from whichever installed mod ships AnimRefresh_v5.lua. If none
--- does, the sit pose is dropped whenever the engine rebuilds the player model
--- and nothing re-issues it. That is a silent loss of the mod's main effect, so
--- say it once -- the same shape Bardcraft uses for the same dependency.
+-- AnimRefresh is bundled (and registered in take_a_seat.omwscripts), but a
+-- newer copy from another mod wins the version guard, and a load order that
+-- registers none of them leaves the interface absent. Then the sit pose is
+-- dropped whenever the engine rebuilds the player model and nothing re-issues
+-- it -- a silent loss of the mod's main effect, so say it once. Same shape
+-- Bardcraft uses for the same dependency.
 local animRefreshWarned = false
 
 local function subscribeRefresh()
@@ -830,8 +838,8 @@ local function subscribeRefresh()
         animRefreshWarned = true
         print('[take a seat] AnimRefresh interface not found; the sit pose will '
             .. 'not be restored after a perspective change, Rest, Travel or a '
-            .. 'game load. Install a mod that ships '
-            .. 'scripts/AnimRefresh/AnimRefresh_v5.lua.')
+            .. 'game load. Check that scripts/AnimRefresh/ is registered in an '
+            .. 'enabled .omwscripts.')
     end
 end
 

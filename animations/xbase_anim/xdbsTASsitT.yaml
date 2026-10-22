@@ -1,0 +1,10 @@
+blending_rules:
+  # Base: 0.2-0.4s. Same rule the other clips in this mod ship with -- without
+  # a config the new transitions cut in hard while everything else eases.
+  # The clips are ~1.0s (tassitd1 1.000, tassitd2 0.967, tassitu1/2 1.033),
+  # so per-clip overrides at about a third of length would be 0.33 if these
+  # should ease more slowly than the base.
+  - from: "*"
+    to: "*"
+    easing: "sineOut"
+    duration: 0.25

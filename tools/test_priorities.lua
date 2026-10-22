@@ -103,7 +103,11 @@ check('misc idle still masks the upper body out', misc.idle.blendMask == B.Lower
 -- exit clips are wired ------------------------------------------------------
 -- These groups ship in xdbsgetup01.kf and xdbsRAsitting1.kf on all four
 -- skeletons; before this they were commented out and never played.
-local SHIPPED_EXITS = { getup1 = true, getup2 = true, rasitup1 = true }
+-- Groups that exist in the shipped .kf files and are legitimate exits.
+-- tassitu1/2 are the purpose-built chair stand-ups; rasitup1 belongs to the RA
+-- (floor) set; getup1/2 still ship in xdbsWakeUp*.kf.
+local SHIPPED_EXITS = { tassitu1 = true, tassitu2 = true,
+                        rasitup1 = true, getup1 = true, getup2 = true }
 local missing, wrong = {}, {}
 for name, seatType in pairs(seats.SEAT_TYPE) do
     local group = seats.exitAnimFor(seats.TARGET_KIND.SEAT, seatType)
@@ -114,10 +118,31 @@ check('every seat type has an exit clip', #missing == 0, table.concat(missing, '
 check('every exit clip is one that ships', #wrong == 0, table.concat(wrong, ','))
 check('the cushion exits with the RA set clip it was posed from',
       seats.exitAnimFor(seats.TARGET_KIND.SEAT, seats.SEAT_TYPE.CUSHION) == 'rasitup1')
--- No sit-down clip exists in any shipped .kf, so enter must stay unwired
--- rather than naming a group that would silently do nothing.
-check('no enter clip is claimed for a seat',
-      seats.enterAnimFor(seats.TARGET_KIND.SEAT, seats.SEAT_TYPE.BACKED_CHAIR) == nil)
+
+-- Sit-down clips now ship (xdbsTASsitT*.kf), so enter must be wired for every
+-- chair-like seat. CUSHION is floor sitting and has no chair sit-down.
+local SHIPPED_ENTERS = { tassitd1 = true, tassitd2 = true }
+local missingEnter, wrongEnter = {}, {}
+for name, seatType in pairs(seats.SEAT_TYPE) do
+    local group = seats.enterAnimFor(seats.TARGET_KIND.SEAT, seatType)
+    if name == 'CUSHION' then
+        if group ~= nil then wrongEnter[#wrongEnter + 1] = 'CUSHION should have none' end
+    elseif not group then missingEnter[#missingEnter + 1] = name
+    elseif not SHIPPED_ENTERS[group] then
+        wrongEnter[#wrongEnter + 1] = name .. '=' .. group
+    end
+end
+check('every chair-like seat has a sit-down clip', #missingEnter == 0,
+      table.concat(missingEnter, ','))
+check('every sit-down clip is one that ships', #wrongEnter == 0,
+      table.concat(wrongEnter, ','))
+
+-- The group names in the .kf are tassitd*/tassitu* -- double s. Typing the
+-- handover spelling (tasistd/tasitu) would play nothing, silently.
+check('the sit-down group is spelled as the .kf spells it',
+      seats.enterAnimFor(seats.TARGET_KIND.SEAT, seats.SEAT_TYPE.BACKED_CHAIR) == 'tassitd1')
+check('the stand-up group is spelled as the .kf spells it',
+      seats.exitAnimFor(seats.TARGET_KIND.SEAT, seats.SEAT_TYPE.BACKED_CHAIR) == 'tassitu1')
 
 print(fails == 0 and 'ALL PASS' or (fails .. ' FAILURES'))
 if fails > 0 then os.exit(1) end

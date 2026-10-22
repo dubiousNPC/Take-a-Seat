@@ -54,5 +54,12 @@ check('a clip that never ends is finished by the timeout', done == 1)
 ended('never_ends')
 check('a late ended event after the timeout does not re-run done', done == 1, done)
 
+-- The timeout is a backstop, not a timer the clips are expected to hit. The
+-- shipped transitions are ~1.03s (measured from xdbsTASsitT.kf text keys), so a
+-- 1.0s timeout fired before the stand-up ended and released controls early.
+local timeout = tonumber(src:match('ONE_SHOT_TIMEOUT%s*=%s*([%d%.]+)'))
+check('the one-shot backstop outlasts the shipped transition clips',
+      timeout ~= nil and timeout > 1.05, tostring(timeout))
+
 print(FAILED and 'FAILURES' or 'ALL PASS')
 if FAILED then os.exit(1) end

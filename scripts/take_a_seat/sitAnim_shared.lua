@@ -59,28 +59,25 @@ local SEAT_ANIM = resolveByType(SEAT_ANIM_BY_NAME, "SEAT_ANIM")
 -- ---------------------------------------------------------------------------
 
 local SEAT_ENTER_ANIM = resolveByType({
-    -- BACKED_CHAIR = "dbssit5_enter",
-    -- THRONE       = "dbssit8_enter",
+    BACKED_CHAIR      = "tassitd1",
+    BENCH             = "tassitd2",
+    STOOL             = "tassitd1",
+    BARSTOOL          = "tassitd1",
+    SINGLE_SEAT_BENCH = "tassitd2",
+    CUSHION           = "rasitd1",
+    THRONE            = "tassitd1",
+    BATH              = "rasitd1",
 }, "SEAT_ENTER_ANIM")
 
--- No sit-DOWN clips ship: xdbssitting.kf, xSitting2.kf and xdbsRAsitting1.kf
--- hold idles only, so enter stays empty and the player snaps into the pose.
--- Stand-UP clips do ship -- getup1/getup2 in xdbsgetup01.kf and rasitup1 in
--- xdbsRAsitting1.kf, on all four skeletons (tools/check_anims.py) -- and until
--- now nothing played them.
---
--- rasitup1 belongs to the RA set, so it pairs with CUSHION, the one seat type
--- whose idle (rasit6) comes from that set. Everything else takes getup1;
--- getup2 is the alternative in the same file if getup1 reads wrong for a type.
 local SEAT_EXIT_ANIM = resolveByType({
-    BACKED_CHAIR      = "getup1",
-    BENCH             = "getup1",
-    STOOL             = "getup1",
-    BARSTOOL          = "getup1",
-    SINGLE_SEAT_BENCH = "getup1",
+    BACKED_CHAIR      = "tassitu1",
+    BENCH             = "tassitu1",
+    STOOL             = "tassitu1",
+    BARSTOOL          = "tassitu1",
+    SINGLE_SEAT_BENCH = "tassitu1",
     CUSHION           = "rasitup1",
-    THRONE            = "getup1",
-    BATH              = "getup1",
+    THRONE            = "tassitu1",
+    BATH              = "tassitu1",
 }, "SEAT_EXIT_ANIM")
 
 -- ---------------------------------------------------------------------------
@@ -150,22 +147,6 @@ local function buildAnimProfiles(anim)
                       blendMask = B.All, loops = 0 },
         },
         [TARGET_KIND.BED] = {
-            -- Was uniform Scripted, on the belief that Scripted "pauses every
-            -- non-Scripted animation". It does not: that suppression comes from
-            -- Animation::mPlayScriptedOnly, which the engine sets only from the
-            -- MWScript anim queue (character.cpp:1951), never from a playBlended
-            -- priority. Scripted is just the highest number.
-            --
-            -- Worse, a uniform priority is DELETED by any animation sharing it
-            -- (animation.cpp:905-911), and the engine plays "containeropen" and
-            -- "containerclose" at uniform Scripted over the whole body
-            -- (character.cpp:550, :570) -- so opening a container while in bed
-            -- removed the bed pose outright.
-            --
-            -- Split like the seat, which also lets a torch through. The legs stay
-            -- at Scripted so nothing walks a prone body, and keeping Scripted in
-            -- one group means the pose still survives mPlayScriptedOnly filtering
-            -- if an MWScript animation does play.
             idle  = { priority = split(BED_LEGS, BED_UPPER),
                       blendMask = B.All, loops = 0 },
             enter = { priority = split(BED_LEGS, BED_UPPER),
@@ -174,7 +155,6 @@ local function buildAnimProfiles(anim)
                       blendMask = B.All, loops = 0 },
         },
         [TARGET_KIND.MISC] = {
-            -- Already upper-body-free by mask, so only the legs need a value.
             idle  = { priority = split(IDLE_LEGS, IDLE_UPPER),
                       blendMask = B.LowerBody, loops = 0 },
             enter = { priority = split(TRANSITION_LEGS, TRANSITION_UPPER),

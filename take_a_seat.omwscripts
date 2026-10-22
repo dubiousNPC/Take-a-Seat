@@ -4,12 +4,12 @@
 # newer copy only that one runs.
 PLAYER: scripts/SharedRay/SharedRay_v2.lua
 
-# AnimRefresh is NO LONGER BUNDLED -- see docs/animrefresh.md. It is what
-# re-issues the sit pose after the engine rebuilds the player's model (a
-# first/third person switch, Rest, Travel, a game load). Without it the pose is
-# simply lost on those events, so any mod in the load order that ships
-# AnimRefresh_v5.lua supplies it (CAKE, DED, WhyWalk all do). The player script
-# logs once if nothing did, rather than failing quietly.
+# AnimRefresh is bundled again, and it needs this line: a script file that is
+# not registered here is shipped and never loaded, so the sit pose would still
+# be dropped on every perspective change, Rest, Travel and game load with the
+# file sitting right there. It version-guards itself, so if another mod ships a
+# newer copy only that one runs.
+PLAYER: scripts/AnimRefresh/AnimRefresh_v6.lua
 
 PLAYER: scripts/take_a_seat/take_a_seat.lua
 GLOBAL: scripts/take_a_seat/take_a_seat_global.lua
