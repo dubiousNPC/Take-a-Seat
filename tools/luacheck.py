@@ -14,8 +14,25 @@ lua.lua_tolstring.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
 lua.lua_tolstring.restype = ctypes.c_char_p
 lua.lua_close.argtypes = [ctypes.c_void_p]
 
+# A directory argument means "every .lua under here". Passing one used to
+# raise IsADirectoryError, so the habit was to pass a find(1) expansion -- and
+# an expansion that matched nothing printed "0 file(s) checked, 0 failed" and
+# exited 0. A checker must not report clean without having looked.
+import os
+
+paths = []
+for arg in sys.argv[1:]:
+    if os.path.isdir(arg):
+        for base, _, files in os.walk(arg):
+            paths += [os.path.join(base, f) for f in sorted(files) if f.endswith('.lua')]
+    else:
+        paths.append(arg)
+if not paths:
+    sys.exit('luacheck: no .lua files in %s -- refusing to report clean'
+             % (' '.join(sys.argv[1:]) or '(no arguments)'))
+
 fail = 0
-for path in sys.argv[1:]:
+for path in paths:
     src = open(path, 'rb').read()
     L = lua.luaL_newstate()
     rc = lua.luaL_loadbufferx(L, src, len(src), path.encode(), b't')
@@ -27,5 +44,5 @@ for path in sys.argv[1:]:
         print('ok   %s' % path)
     lua.lua_close(L)
 
-print('\n%d file(s) checked, %d failed' % (len(sys.argv) - 1, fail))
+print('\n%d file(s) checked, %d failed' % (len(paths), fail))
 sys.exit(1 if fail else 0)

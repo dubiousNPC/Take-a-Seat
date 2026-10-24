@@ -36,6 +36,11 @@ import re
 import sys
 import os
 import glob
+# The script's own directory, so `-I` (isolated mode, which drops it from
+# sys.path) cannot turn this import into a different bug.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import luastrip
+
 
 # Lua 5.1 / LuaJIT base library plus OpenMW's sandbox additions.
 BUILTINS = {
@@ -76,20 +81,16 @@ DEFINE_AT_ROOT = re.compile(r'^function\s+([A-Za-z_][\w]*)\s*\(', re.M)
 
 
 def strip_lua(src: str) -> str:
-    """Remove long comments, line comments and string literals."""
-    src = re.sub(r'--\[(=*)\[.*?\]\1\]', ' ', src, flags=re.S)
-    src = re.sub(r'\[(=*)\[.*?\]\1\]', ' ', src, flags=re.S)
-    src = re.sub(r'--[^\n]*', '', src)
-    # NOTE the \n in both character classes. Without it, [^"\\] matches
-    # newlines, so a single unbalanced quote swallows every line up to the next
-    # one -- 214 lines of WhyWalk's global.lua in the case that found this,
-    # taking the `local function` declarations with it and leaving their call
-    # sites behind. The checker then reported eight declared functions as
-    # undeclared globals. A Lua short string cannot contain a raw newline, so
-    # excluding it is also just correct.
-    src = re.sub(r'"(\\.|[^"\\\n])*"', '""', src)
-    src = re.sub(r"'(\\.|[^'\\\n])*'", "''", src)
-    return src
+    """Remove comments and string literals, in one pass.
+
+    This used to be a stack of regexes that ran comments first and strings
+    second, which a `--` inside a string literal defeats: the rest of that line
+    disappears, closing quote included. See tools/luastrip.py -- the same shape
+    of bug blanked half of sitAnim_shared.lua for api_sweep. One pass with
+    state cannot be fooled that way, and it preserves offsets and line numbers,
+    which this checker reports.
+    """
+    return luastrip.strip(src)
 
 
 def declared_names(code: str) -> set:

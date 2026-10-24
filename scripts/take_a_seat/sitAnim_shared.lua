@@ -81,6 +81,101 @@ local SEAT_EXIT_ANIM = resolveByType({
 }, "SEAT_EXIT_ANIM")
 
 -- ---------------------------------------------------------------------------
+-- ANIMATION GROUP FALLBACKS
+-- ---------------------------------------------------------------------------
+-- A group a skeleton does not define plays nothing, silently. The beast
+-- skeleton gets its chair transitions from xdbsTASsitTkna.kf, which carries
+-- the tassit* groups, so the RA-set groups used by floor seating resolve to
+-- their chair equivalents there rather than to nothing.
+--
+-- Checked per actor with animation.hasGroup at play time, not here: the same
+-- install serves human, female and beast skeletons.
+local GROUP_FALLBACKS = {
+    rasitd1  = { "tassitd1" },
+    rasitd2  = { "tassitd2", "tassitd1" },
+    rasitu1  = { "tassitu1" },
+    rasitu2  = { "tassitu2", "tassitu1" },
+    rasitup1 = { "tassitu1" },
+    tassitd2 = { "tassitd1" },
+    tassitu2 = { "tassitu1" },
+}
+
+---Alternatives for a group, best first, excluding the group itself.
+---@param group string|nil
+---@return table
+local function groupFallbacks(group)
+    if not group then return {} end
+    return GROUP_FALLBACKS[group] or {}
+end
+
+-- ---------------------------------------------------------------------------
+-- POSE DELTA
+-- ---------------------------------------------------------------------------
+-- The authored solver roots are solved for the reference pose pcdbssit5, which
+-- is dbssit5 (confirmed by the pack's author). Every seat type here plays a
+-- different clip, so the obvious worry is that a root solved for one pose puts
+-- the body somewhere else in another.
+--
+-- Measured, not assumed. tools/kf_root_offsets.py reads the root and pelvis
+-- tracks straight out of the shipped .kf files. Across every seated clip this
+-- mod plays -- dbssit2/4/5/6/8 (xdbssitting.kf), dbssitting24 (xSitting2.kf)
+-- and rasit6 (xdbsRAsitting1.kf) -- Bip01 and Bip01 Pelvis have the SAME
+-- translation (2.904, 0, 0) and the SAME rotation, to 0.000 units and 0.00
+-- degrees. Morrowind animates bone rotations, not bone translations: these
+-- poses first differ at the spine (26-59 degrees of lean), which is the
+-- per-seat variety, not a placement error. The hips land in the same place
+-- whichever clip plays, so pcdbssit5-solved roots are valid for all of them
+-- and this table is empty because the correction measures zero.
+--
+-- If one SEAT TYPE ever sits high, low or fore/aft, the correction belongs
+-- here, keyed by its animation group -- one entry fixes every record that uses
+-- that clip. Per-record offsets are the wrong tool and the pack says so: check
+-- for a double-applied provider or animation correction first.
+--
+-- Values are actor-space: x right, y forward, z up, in game units.
+local POSE_DELTA = {
+    -- dbssit4 = { x = 0, y = 0, z = 0 },
+}
+
+local function poseDelta(group)
+    return group and POSE_DELTA[group] or nil
+end
+
+-- ---------------------------------------------------------------------------
+-- AUTHORED SOLVER PROFILES
+-- ---------------------------------------------------------------------------
+-- Model-keyed authored geometry, generated from the solver pack. This is the
+-- primary positioner; the raycast chain in take_a_seat.lua is the fallback for
+-- models the pack does not cover.
+local solver = require('scripts.take_a_seat.solver_profiles')
+
+local SOLVER_CONTRACT = 3
+
+-- A contract bump changes the meaning of root/yaw. Refusing to read it is the
+-- documented behaviour, and silently misreading coordinates is the failure it
+-- exists to prevent.
+local solverUsable = solver and solver.contractVersion == SOLVER_CONTRACT
+if not solverUsable then
+    print(("[take a seat] solver_profiles.lua reports contract %s, expected %d; "
+        .. "authored placement disabled, falling back to raycast positioning")
+        :format(tostring(solver and solver.contractVersion), SOLVER_CONTRACT))
+end
+
+---Authored profile for a model path, or nil.
+---@param model string|nil a VFS model path, any case, either slash
+local function solverProfile(model)
+    if not solverUsable or not model then return nil end
+    local key = model:lower():gsub('\\', '/')
+    return solver.PROFILES[key]
+end
+
+---Slot by index, falling back to the first.
+local function solverSlot(profile, index)
+    if not profile or not profile.slots then return nil end
+    return profile.slots[index or 1] or profile.slots[1]
+end
+
+-- ---------------------------------------------------------------------------
 -- TARGET KINDS AND PRIORITY PROFILES
 -- ---------------------------------------------------------------------------
 
@@ -583,6 +678,11 @@ return {
 
     TARGET_KIND              = TARGET_KIND,
     buildAnimProfiles        = buildAnimProfiles,
+    groupFallbacks           = groupFallbacks,
+    poseDelta                = poseDelta,
+    solverProfile            = solverProfile,
+    solverSlot               = solverSlot,
+    solverContract           = SOLVER_CONTRACT,
 
     BED_TYPE                 = BED_TYPE,
     BEDS_ENABLED             = BEDS_ENABLED,

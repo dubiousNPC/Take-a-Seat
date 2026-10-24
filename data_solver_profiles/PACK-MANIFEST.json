@@ -1,0 +1,39 @@
+{
+  "packVersion": "2026-10-23",
+  "contractVersion": 3,
+  "profileCounts": {
+    "total": 478,
+    "sit": 189,
+    "sleep": 289,
+    "bunk": 40
+  },
+  "runtimeProfileCommit": "ac0fbefc7a12281bd5434351f311172bd0fe8aaf",
+  "discoveryFixCommit": "71f79344c2e104ddfa1e5c8831dce17a7a0bf118",
+  "sourceManifest": null,
+  "sourceReport": null,
+  "files": {
+    "furniture_solver_profiles.audit.json": {
+      "bytes": 814270,
+      "sha256": "515cae221b369d8d9a72310c70e98bed00355b90211c62e0144445d5a1a5be69"
+    },
+    "provenance/batch_report.json": {
+      "bytes": 1175514,
+      "sha256": "af29da721770cbbe0abdde6ce33a0e32dd8a791e1a03aa28d3ebc51ebab6ff62"
+    },
+    "provenance/discovered_furniture_manifest.json": {
+      "bytes": 219224,
+      "sha256": "7b3422e6fa8d32487e7e0bf2a9818def781baf1b865f9e21934ca6c9c39c2fd7"
+    },
+    "README.md": {
+      "bytes": 6499,
+      "sha256": "83b5cc89835611e92def054d8dafc68d06379ba36635ed1ab49e5b0c9543eae0"
+    },
+    "solver-profiles.json": {
+      "bytes": 405892,
+      "sha256": "6b00bbdacd371649c3ae7be40f77697153f2431b88265e03460a3f6f7ab239aa"
+    },
+    "PACK-MANIFEST.json": {
+      "bytes": 1144
+    }
+  }
+}

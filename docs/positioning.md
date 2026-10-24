@@ -1,5 +1,102 @@
 # Seat positioning: what this mod uses, and what it ignores
 
+## What places the player (v0.39)
+
+Two positioners, in this order.
+
+1. **Authored, from the solver pack.** If the furniture's `record.model` is one
+   of the 189 sit profiles in `scripts/take_a_seat/solver_profiles.lua`, the
+   seat point and the facing come from the pack:
+   `worldRoot = objectPosition + objectRotation * (slot.root * scale)` and
+   `worldYaw = objectYaw + rad(slot.yaw)`, scale clamped to 0.25–4.0. No ray is
+   cast for position. `slot.root` is a solved **actor root** for the reference
+   pose `pcdbssit5` (= `dbssit5`), so **nothing** is layered on top of it: not
+   `SIT_PIVOT_OFFSET`, not the TSV offsets below, not a half turn.
+2. **Raycast, for everything else.** The chain that was the only positioner
+   before: push the chair clear, find the seat plane, push the player clear.
+   Unchanged except that the v0.37 overhead escape is gone.
+
+Which path ran is visible with `DEBUG = true`: the authored path logs
+`[sit] authored <record> (<seatType>/<facing>) model=... slot=... yaw=...`, and
+a model with no profile logs `no authored profile for <record>; raycasting`.
+
+The pack covers four seat types — `backed_chair`, `bench`, `stool`, `barstool`.
+CUSHION, BATH, THRONE and SINGLE_SEAT_BENCH have no authored profiles and take
+the raycast path.
+
+### The reference pose is not a problem, and that is measured
+
+Every authored root is solved for one pose, but this mod plays a different
+seated clip per seat type. `tools/kf_root_offsets.py` reads the root and pelvis
+tracks out of the shipped `.kf` files: across `dbssit2/4/5/6/8`,
+`dbssitting24` and `rasit6`, `Bip01` and `Bip01 Pelvis` hold the same
+translation and the same rotation to 0.000 units and 0.00 degrees. The poses
+differ from the spine up (26–59° of lean), which is the per-seat variety, not a
+placement error. Reproduce it with:
+
+```
+python3 tools/kf_root_offsets.py animations/xbase_anim/xSitting2.kf \
+    animations/xbase_anim/xdbsRAsitting1.kf \
+    --ref-file animations/xbase_anim/xdbssitting.kf --ref dbssit5 \
+    --bone 'Bip01 Pelvis' --groups dbssitting24,rasit6
+```
+
+`POSE_DELTA` in `sitAnim_shared.lua` is therefore empty, and wired in anyway so
+that a correction measured later takes effect.
+
+## Getting up (v0.40)
+
+Sitting down and standing up are now symmetric: both end in exactly one
+teleport to a point that was checked first.
+
+The stand-up point, best first:
+
+1. **The position the player was standing in when they sat.** The strongest
+   candidate there is -- they walked to it. Validated by a ground ray and the
+   same-floor tolerance; the navmesh is used to snap it when it has an answer
+   but is not required, because a gap in an interior navmesh must not refuse a
+   sit that plainly works. Dropped entirely if the cell changed while they sat.
+2. **Forward of the seated facing**, `EXIT_FORWARD` 48 units out of the chair
+   rather than into its back. Invented by the mod, so the navmesh *is*
+   required here.
+3. **The seat itself**, which is where the player already is.
+
+Each candidate is grounded by a physics ray (`nearby.castRay`, ignoring the
+furniture), snapped to the navmesh for the player's own agent bounds
+(`types.Actor.getPathfindingAgentBounds`), and rejected if the floor it lands
+on is more than `GROUND_Z_TOLERANCE` (35) from the floor the player sat down
+from -- that is the stairwell case: a point directly below the seat, on the
+storey underneath. The chosen point is lifted `EXIT_LIFT` (8) clear of the
+floor so the engine settles the player onto it rather than resolving an overlap
+with the seat.
+
+If none of them validate, nothing moves. That is deliberately the pre-v0.40
+behaviour: no teleport is safer than a teleport to an unchecked point.
+
+The teleport happens in the stand-up clip's completion callback -- never during
+it, so the animation is not fighting a moving root -- and the movement override
+is released after it, not before.
+
+### Refusing, instead of coping
+
+The same validation runs *before* the sit, while the player is still standing
+somewhere they demonstrably reached on foot. A seat is refused when:
+
+- the furniture is tipped over (`furniture.rotation` applied to world up has
+  `z < 0.7`, about 45°) -- the player path had no such test and would seat you
+  on a chair lying on its side; or
+- no stand-up candidate validates, which in practice means the player is not
+  standing on anything (levitating, swimming) and the invented candidates have
+  no navmesh either.
+
+A refusal says so in a message box rather than doing nothing, because a sit
+that silently fails reads as a broken mod.
+
+What this does NOT do: no route is *pathfound* from the seat to the exit, and
+no clearance check is made above the seat. The first is unnecessary while the
+exit point is a place the player stood a moment ago; the second was the v0.37
+overhead escape, which is what put players on tabletops.
+
 ## The sync
 
 `data_furniture_profiles/sdp/` is harvested from Procedural Chatter / SDP,
@@ -20,9 +117,9 @@ reads three columns -- `RecordID`, `SeatType`, `FinalZOffset` -- and the update
 touched none of them. Regenerating `furniture_profiles.lua` before and after
 the sync gives byte-identical data.
 
-## The gap behind that
+## The gap behind that (what motivated the rework)
 
-This mod consumes **no** per-record placement offset for chairs. It takes the
+Before v0.39 this mod consumed **no** per-record placement offset for chairs. It takes the
 furniture's own yaw (`getObjectYaw`), finds the seat plane by raycast, applies
 `SIT_PIVOT_OFFSET` where a record needs it, and pushes clear of obstructions.
 Beds get a yaw from their profile; chairs do not.
@@ -47,6 +144,16 @@ Every `respectFurnitureForward` chair in the table is corrected by about half a
 turn, which says those models' forward axis points away from where a seated
 actor should face. SDP also has two rotation modes this mod has no equivalent
 for: `faceOpenSide` (11 records) and `faceNearestTableOrCounter` (6).
+
+## Why the TSV offsets are still unused
+
+v0.39 closed this gap from the other end: the solver pack supplies a solved
+actor root and a facing per **model**, which is a complete answer for the
+records it covers, in a frame whose arithmetic is documented and testable. The
+TSV columns below are in SDP's own frame, on top of SDP's own animation
+normalisation, and the two must not be combined — applying both would
+double-correct. They stay unused, and the note below is kept only for the
+records the pack does not cover.
 
 ## Before adopting any of it
 

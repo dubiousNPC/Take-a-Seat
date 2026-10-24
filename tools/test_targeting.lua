@@ -152,64 +152,113 @@ occEnv.nearby.actors = { actorAt('player', 100, 100, 0) }
 check('the player does not block their own seat', seatOccupied(chair) == false)
 
 -- ---------------------------------------------------------------------------
--- overheadCandidates ordering
+-- the v0.37 overhead-escape stage is gone
 -- ---------------------------------------------------------------------------
-local candEnv = { math = math, ipairs = ipairs, table = table,
-                  OVERHEAD_RING_RADII = { 18, 30, 42 }, OVERHEAD_RING_COUNT = 8 }
-local candBody = extract('(local function overheadCandidates%(backYaw%).-\n    return out\nend\n)',
-                         'overheadCandidates')
-local overheadCandidates = load(candBody .. '\nreturn overheadCandidates', 'cand', 't',
-                                setmetatable(candEnv, { __index = _G }))()
-
-local cands = overheadCandidates(0)       -- prefer +y ("back" is north here)
-check('every ring position is offered', #cands == 3 * 8, #cands)
-
-local radii = {}
-for _, c in ipairs(cands) do radii[#radii + 1] = c.r end
-local ascending = true
-for i = 2, #radii do if radii[i] < radii[i - 1] then ascending = false end end
-check('nearer rings are tried first', ascending, table.concat(radii, ','))
-
--- The first candidate must be straight back: moving the player out from under
--- the table, not further under it.
-check('the first candidate is straight back',
-      math.abs(cands[1].dx) < 0.001 and math.abs(cands[1].dy - 18) < 0.001,
-      string.format('%.2f,%.2f', cands[1].dx, cands[1].dy))
-
--- Nothing in the first ring may point forward (toward the table) before the
--- sideways directions have been tried.
-local firstRing = {}
-for _, c in ipairs(cands) do if c.r == 18 then firstRing[#firstRing + 1] = c end end
-check('the forward direction is tried last in a ring',
-      math.abs(firstRing[#firstRing].dy + 18) < 0.001,
-      string.format('%.2f', firstRing[#firstRing].dy))
-
--- A rotated chair keeps the same relationship.
-local rotated = overheadCandidates(math.pi / 2)   -- back is +x
-check('the preference follows the chair yaw',
-      math.abs(rotated[1].dx - 18) < 0.001 and math.abs(rotated[1].dy) < 0.001,
-      string.format('%.2f,%.2f', rotated[1].dx, rotated[1].dy))
+-- That stage moved the player off the authored seat point by up to 42 units in
+-- whichever direction had headroom, which is what put the player high on the
+-- table and away from the chair. With authored roots it has no job, and its
+-- ring probes cost ~24 async casts per sit. Nothing of it may survive: a
+-- leftover constant means someone wired it back in.
+for _, name in ipairs({ 'OVERHEAD_CLEARANCE', 'OVERHEAD_RING_RADII',
+                        'OVERHEAD_RING_COUNT', 'clearOverhead',
+                        'overheadCandidates' }) do
+    check('no trace of ' .. name, src:find(name, 1, true) == nil)
+end
 
 -- ---------------------------------------------------------------------------
--- the clearance must cover a standing capsule
+-- authored placement is tried before any ray
 -- ---------------------------------------------------------------------------
-local clearance = tonumber(src:match('OVERHEAD_CLEARANCE%s*=%s*(%d+)'))
-check('overhead clearance is at least a standing actor tall',
-      clearance and clearance >= 100, tostring(clearance))
--- The seated player's facing is the global script's rotation, not the chair's
--- forward. If these two drift apart the escape pushes the player UNDER the
--- table instead of out from it, which looks exactly like the bug it fixes.
+-- The pack is the primary positioner and the raycast the fallback, so beginSit
+-- must consult the profile first and return without casting when it has one.
+local begin = extract('(local function beginSit%(furniture.-\nend\n)', 'beginSit')
+local profileAt = begin:find('seats%.solverProfile')
+local rayAt     = begin:find('resolveChairPosition')
+check('beginSit looks up an authored profile', profileAt ~= nil)
+check('the authored lookup precedes the raycast chain',
+      profileAt and rayAt and profileAt < rayAt,
+      tostring(profileAt) .. ' vs ' .. tostring(rayAt))
+check('the authored branch commits without falling through',
+      begin:match('authoredPlacement.-\n%s*return\n') ~= nil)
+
+-- ---------------------------------------------------------------------------
+-- the authored yaw must bypass the global script's +pi flip
+-- ---------------------------------------------------------------------------
+-- The global seats the player at yaw + pi, because the raycast path passes the
+-- furniture's own forward. authoredPlacement returns an ABSOLUTE world yaw
+-- that already faces outward, so flipping it again would seat the player
+-- backwards -- facing into the chair, under the table.
 local globalSrc = io.open('scripts/take_a_seat/take_a_seat_global.lua'):read('a')
-check('the global script seats the player at yaw + pi',
-      globalSrc:find('rotateZ%(yaw %+ math%.pi%)') ~= nil)
-check('the escape direction is derived from that same facing',
-      src:find('local facingYaw = yaw %+ math%.pi') ~= nil and
-      src:find('clearOverhead%(sitPos, furniture, facingYaw') ~= nil)
-check('the escape prefers the opposite of the facing',
-      src:find('overheadCandidates%(facingYaw %+ math%.pi%)') ~= nil)
+check('the global honours a yawAbsolute flag',
+      globalSrc:find('eventData%.yawAbsolute and yaw or %(yaw %+ math%.pi%)') ~= nil)
+check('the flag still flips when it is absent',
+      globalSrc:find('yaw %+ math%.pi') ~= nil)
+check('commitSit forwards the flag',
+      src:find('yawAbsolute%s*= yawAbsolute and true or nil') ~= nil)
+check('the authored path sets it',
+      src:find('gateAndCommit%(furniture, nil, sitPos, worldYaw, true%)') ~= nil)
+check('the raycast path does not',
+      src:find('getObjectYaw%(furniture%), false%)') ~= nil)
 
-check('the escape is applied before the sit is committed',
-      src:find('commitSit%(furniture, chairPos, sitPos %+ escape, yaw%)') ~= nil)
+-- Both placement paths go through the gate, and the gate is the only caller of
+-- commitSit. A path that reached commitSit directly would skip the exit
+-- validation and could seat the player somewhere they cannot get up from.
+local commitCalls = 0
+for line in src:gmatch('[^\n]+') do
+    if line:find('commitSit%(') and not line:find('local function commitSit')
+       and not line:match('^%s*%-%-') then
+        commitCalls = commitCalls + 1
+    end
+end
+check('commitSit has exactly one caller', commitCalls == 1, commitCalls)
+check('that caller is the gate',
+      src:find('local function gateAndCommit') ~= nil and
+      src:match('local function gateAndCommit.-commitSit%(furniture, chairPos, sitPos, yaw, yawAbsolute%)') ~= nil)
+check('the gate refuses before committing',
+      src:match('safety%.sitRejectReason.-if reason then.-return false') ~= nil)
+
+-- The authored path leaves the furniture alone, so there is nothing to put
+-- back on stand-up. Restoring a chair that never moved teleports it onto
+-- itself, which is a world write and a physics nudge for nothing.
+check('the chair placement is only recorded when the chair may move',
+      src:find('originalChairPos = chairPos and furniture%.position or nil') ~= nil)
+check('the restore is sent only when a placement was recorded',
+      src:find('if currentFurniture and originalChairPos then') ~= nil)
+
+-- ---------------------------------------------------------------------------
+-- stand-up: the gate's companion
+-- ---------------------------------------------------------------------------
+-- The exit teleport happens in the one-shot's completion callback, not during
+-- the clip: a root that moves while the stand-up plays is what the animation
+-- would be fighting. And it is ONE teleport, not a lerp -- lerping a player
+-- through interior geometry is the stuck case the gate exists to prevent.
+check('the stand-up point is committed from the exit clip callback',
+      src:match("playOneShot%(exitGroup, 'exit', function%(%).-commitStandPoint") ~= nil)
+check('controls are released after the teleport, not before',
+      src:match('commitStandPoint%(furnitureRef%)%s*\n%s*releaseControls%(%)') ~= nil)
+check('the stand-up sends exactly one teleport event',
+      select(2, src:gsub('SitStandTeleport', '')) == 1)
+check('the global handles it', globalSrc:find('SitStandTeleport%s*=') ~= nil)
+check('the global teleports position only, leaving the facing alone',
+      globalSrc:match('onSitStandTeleport.-player:teleport%(player%.cell, eventData%.position%)') ~= nil)
+
+-- A cell change while seated invalidates the recorded origin: those
+-- coordinates in a different cell are somewhere the player has never been.
+check('the recorded origin is dropped on a cell change',
+      src:find('if standingCell and self%.cell ~= standingCell then return nil end') ~= nil)
+check('the floor height goes with it',
+      src:find('origin and standingFloorZ or nil') ~= nil)
+
+-- Standing up on a movement press is bound by NAME, and the names are taken
+-- from the engine's own registry rather than typed in hopefully: a handler on
+-- a key this build does not have would never fire and never complain.
+check('stand-up actions are checked against input.actions',
+      src:find('if input%.actions%[key%] then') ~= nil)
+check('and what was bound is reported',
+      src:find('%[sit%] stand up on movement') ~= nil)
+check('a build without named actions still says so',
+      src:find('no named input actions') ~= nil)
+check('the sit-down transition is not interruptible by it',
+      src:find('if isSitting and sitAnimStarted and actionPressed%(value%) then') ~= nil)
 
 print(fails == 0 and 'ALL PASS' or (fails .. ' FAILURES'))
 if fails > 0 then os.exit(1) end

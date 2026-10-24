@@ -55,8 +55,9 @@ def read_lual(path):
     return out
 
 fail = 0
+inspected = 0          # script registrations actually read
 targets = []
-for a in sys.argv[1:]:
+for a in sys.argv[1:] or ['.']:
     if os.path.isdir(a):
         for r, _d, fs in os.walk(a):
             for f in fs:
@@ -70,6 +71,7 @@ for path in targets:
         flags = read_lual(path)
         if not flags:
             continue          # a plugin with no LUAL registers no scripts
+        inspected += len(flags)
         print('%s: %d script(s) via LUAL' % (os.path.basename(path), len(flags)))
         for script, fs in sorted(flags.items()):
             if len(fs) > 1 and fs != {'LOCAL/CUSTOM'}:
@@ -86,10 +88,14 @@ for path in targets:
             continue
         flag, script = line.split(':', 1)
         flags[script.strip().lower()].add(flag.strip().upper())
+    inspected += len(flags)
     print('%s: %d script(s)' % (os.path.basename(path), len(flags)))
     for script, fs in sorted(flags.items()):
         if len(fs) > 1:
             fail += 1
             print('  FLAGS MISMATCH  %s  declared as %s' % (script, ', '.join(sorted(fs))))
-print('\n%d mismatch(es)' % fail)
+if not inspected:
+    sys.exit('check_manifest: found no .omwscripts manifest and no LUAL record '
+             'under %s -- refusing to report clean' % ', '.join(targets or ['(no arguments)']))
+print('\n%d script registration(s) inspected, %d mismatch(es)' % (inspected, fail))
 sys.exit(1 if fail else 0)

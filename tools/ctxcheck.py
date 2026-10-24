@@ -30,6 +30,11 @@ import os
 import re
 import sys
 import glob
+# The script's own directory, so `-I` (isolated mode, which drops it from
+# sys.path) cannot turn this import into a different bug.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import luastrip
+
 
 EXPAND = {
     'runtime': {'global', 'local', 'player', 'menu'},
@@ -71,8 +76,9 @@ def load_policy(cod3x_dir):
 
 
 def strip_lua(src):
-    src = re.sub(r'--\[(=*)\[.*?\]\1\]', ' ', src, flags=re.S)
-    return re.sub(r'--[^\n]*', '', src)
+    """Comments and string literals out, in one pass -- see tools/luastrip.py
+    for why this is not a pair of regexes."""
+    return luastrip.strip(src)
 
 
 def check_file(path, availability, members, valid):

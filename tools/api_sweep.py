@@ -6,6 +6,11 @@ message in the log. Checking statically is the only way to see them.
 """
 import re, os, sys, collections
 
+# The script's own directory, so `-I` (isolated mode, which drops it from
+# sys.path) cannot turn this import into a different bug.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import luastrip
+
 # usage: api_sweep.py <scripts-dir> [<cod3x-dir>] [--preset sunsdusk]
 #        (cod3x-dir contains openmw/)
 argv = list(sys.argv[1:])
@@ -30,13 +35,30 @@ PRESETS = {
 if PRESET is not None and PRESET not in PRESETS:
     sys.exit('unknown preset %r; have: %s' % (PRESET, ', '.join(PRESETS)))
 
+# Modules that arrive as PARAMETERS instead of require()s. Dependency injection
+# is what makes these files testable without the engine, and it also hides
+# their engine calls from a require-based scan: `env.nearby.castRay` parses as
+# an ordinary table field, so a misspelling there would reach players unseen --
+# worse than elsewhere, because the mocks in the tests would happily define
+# whatever name the code asked for. Named here so they are checked like any
+# other API use. A file listed with a prefix it no longer uses fails the
+# assertion below rather than passing quietly.
+INJECTED = {
+    'take_a_seat/seat_safety.lua': {
+        'env.nearby': 'nearby',
+        'env.util': 'util',
+    },
+    'take_a_seat/sitAnim_shared.lua': {
+        # buildAnimProfiles(anim) takes openmw.animation as an argument.
+        'anim': 'animation',
+    },
+}
 
-def strip(src):
-    src = re.sub(r'--\[\[.*?\]\]', ' ', src, flags=re.S)
-    src = re.sub(r'--[^\n]*', ' ', src)
-    src = re.sub(r'"(?:\\.|[^"\\])*"', '""', src)
-    src = re.sub(r"'(?:\\.|[^'\\])*'", "''", src)
-    return src
+
+# Comments and strings in one pass. The two-regex version this replaced was
+# fooled by a `--` inside a string literal -- see tools/luastrip.py -- and
+# silently stopped checking the rest of sitAnim_shared.lua.
+strip = luastrip.strip
 
 
 def stub_members(mod):
@@ -104,7 +126,12 @@ TYPES_CLASSES = types_classes()
 assert TYPES_CLASSES.get('Actor'), 'types stub parse found no Actor members'
 
 findings = []
+
+
 def strip_comments(src):
+    """Comments out, string literals INTACT: the require() lines this is used
+    for name their module in a string, so blanking strings here would leave the
+    sweep with no aliases at all."""
     src = re.sub(r'--\[\[.*?\]\]', ' ', src, flags=re.S)
     return re.sub(r'--[^\n]*', ' ', src)
 
@@ -128,6 +155,12 @@ for fn in sorted(files):
             if name not in aliases and not re.search(r'\blocal\s+%s\b' % re.escape(name), raw):
                 if re.search(r'(?<![\w.])%s[.:]' % re.escape(name), strip(raw)):
                     aliases[name] = mod
+    injected = INJECTED.get(fn.replace(os.sep, '/'), {})
+    for prefix, mod in injected.items():
+        assert re.search(r'(?<![\w.])%s[.:]' % re.escape(prefix), strip(raw)), (
+            '%s does not use %s any more -- remove it from INJECTED rather '
+            'than leaving a prefix that checks nothing' % (fn, prefix))
+        aliases[prefix] = mod
     nalias += len(aliases)
     src = strip(raw)
     # local Actor = types.Actor  -> treat Actor as types.Actor

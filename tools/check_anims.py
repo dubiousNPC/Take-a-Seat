@@ -16,18 +16,36 @@ skeleton variant nobody made files for: OpenMW resolves additional animation
 sources per skeleton, so a female actor looks in animations/xbase_anim_female/
 and does not fall back to animations/xbase_anim/.
 
+The group list comes from the mod's OWN tables, dumped by
+tools/dump_anim_groups.lua through the Lua runtime -- not from a name list
+passed on the command line and not from a regex over the source. A plain run
+used to print "0 group(s) unplayable" because `declared` was empty unless
+--groups was given: a checker that reports clean because it did not look.
+
+Fallbacks count. The runtime resolves a group the actor's skeleton lacks
+through sitAnim_shared's GROUP_FALLBACKS (that is how the beast skeleton, which
+declares only the tassit* transitions, plays the RA-set ones), so a group
+absent from a folder is only a fault when none of its fallbacks is there
+either.
+
 Usage:
     check_anims.py <mod-dir> [--groups NAME,NAME] [--skeletons a,b,c]
 """
 import os
 import re
 import struct
+import subprocess
 import sys
 import glob
 
-# The four skeletons a humanoid-facing mod normally has to cover.
+# Every skeleton variant this mod ships animations for. OpenMW resolves
+# additional animation sources per skeleton with no fallback between them, so a
+# folder left out of this list is a folder nobody checked -- and the mod ships
+# first-person variants for female and beast actors too, which an earlier
+# four-folder list quietly skipped.
 DEFAULT_SKELETONS = ['xbase_anim', 'xbase_anim.1st',
-                     'xbase_anim_female', 'xbase_animkna']
+                     'xbase_anim_female', 'xbase_anim_female.1st',
+                     'xbase_animkna', 'xbase_animkna.1st']
 
 TEXTKEY = re.compile(r'^([A-Za-z][\w ]*?)\s*:\s*(start|stop|loop start|loop stop)\b',
                      re.IGNORECASE)
@@ -74,6 +92,28 @@ def lua_group_candidates(root, known):
     return hits
 
 
+def dump_groups(root):
+    """{group: (fallbacks, uses)} from the mod's own animation tables."""
+    out = subprocess.run(
+        [sys.executable, os.path.join('tools', 'luarun.py'),
+         os.path.join('tools', 'dump_anim_groups.lua')],
+        cwd=root, capture_output=True, text=True)
+    if out.returncode != 0 or not out.stdout.strip():
+        raise SystemExit('could not read the animation tables: %s%s'
+                         % (out.stdout, out.stderr))
+    groups = {}
+    for line in out.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split('\t')
+        name = parts[0].strip().lower()
+        alts = [a.strip().lower() for a in (parts[1] if len(parts) > 1 else '').split(',')
+                if a.strip()]
+        uses = parts[2].strip() if len(parts) > 2 else ''
+        groups[name] = (alts, uses)
+    return groups
+
+
 def main(argv):
     declared, skeletons = set(), list(DEFAULT_SKELETONS)
     args, i = [], 0
@@ -88,6 +128,20 @@ def main(argv):
             args.append(argv[i])
             i += 1
     root = args[0] if args else '.'
+
+    # Derived unless overridden. An empty list is not an excuse to pass.
+    fallbacks, uses = {}, {}
+    if declared:
+        print('group list: %d name(s) from --groups' % len(declared))
+    else:
+        table = dump_groups(root)
+        declared = set(table)
+        fallbacks = {g: v[0] for g, v in table.items()}
+        uses = {g: v[1] for g, v in table.items()}
+        print('group list: %d name(s) from the mod\'s own animation tables'
+              % len(declared))
+    if not declared:
+        raise SystemExit('no groups to check -- refusing to report clean')
 
     anim_root = os.path.join(root, 'animations')
     present = {d: {} for d in skeletons}
@@ -127,22 +181,37 @@ def main(argv):
         flag = 'ALL' if not missing_in else 'missing in ' + ', '.join(missing_in)
         print('  %-24s %s' % (g, flag))
 
-    problems = 0
-    if declared:
-        print('\ngroups the scripts play:')
-        hits = lua_group_candidates(root, declared)
-        for g in sorted(declared):
-            where = hits.get(g)
-            loc = ('%s:%d' % where[0]) if where else 'not referenced in Lua'
-            missing_in = [d for d in skeletons if g not in per_skel[d]]
-            if not missing_in:
-                print('  ok        %-24s %s' % (g, loc))
+    problems, covered = 0, 0
+    print('\ngroups the scripts play:')
+    for g in sorted(declared):
+        alts = fallbacks.get(g, [])
+        use = uses.get(g) or 'from --groups'
+        missing_in = [d for d in skeletons if g not in per_skel[d]]
+        if not missing_in:
+            print('  ok        %-24s %s' % (g, use))
+            continue
+        # Absent here -- is a fallback playable on each of those skeletons?
+        uncovered, via = [], set()
+        for d in missing_in:
+            alt = next((a for a in alts if a in per_skel[d]), None)
+            if alt:
+                via.add(alt)
             else:
-                problems += 1
-                print('  MISSING   %-24s absent from: %s  (%s)'
-                      % (g, ', '.join(missing_in), loc))
+                uncovered.append(d)
+        if not uncovered:
+            covered += 1
+            print('  fallback  %-24s absent from %s, plays %s there  (%s)'
+                  % (g, ', '.join(missing_in), ', '.join(sorted(via)), use))
+        else:
+            problems += 1
+            print('  MISSING   %-24s absent from: %s%s  (%s)'
+                  % (g, ', '.join(uncovered),
+                     '' if not alts else ' -- fallbacks %s are not there either'
+                     % ', '.join(alts), use))
 
-    print('\n%d group(s) unplayable on at least one skeleton' % problems)
+    print('\n%d group(s) checked, %d covered by a fallback, '
+          '%d unplayable on at least one skeleton'
+          % (len(declared), covered, problems))
     return 1 if problems else 0
 
 

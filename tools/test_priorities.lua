@@ -119,21 +119,40 @@ check('every exit clip is one that ships', #wrong == 0, table.concat(wrong, ',')
 check('the cushion exits with the RA set clip it was posed from',
       seats.exitAnimFor(seats.TARGET_KIND.SEAT, seats.SEAT_TYPE.CUSHION) == 'rasitup1')
 
--- Sit-down clips now ship (xdbsTASsitT*.kf), so enter must be wired for every
--- chair-like seat. CUSHION is floor sitting and has no chair sit-down.
-local SHIPPED_ENTERS = { tassitd1 = true, tassitd2 = true }
+-- Sit-down clips ship for chairs (xdbsTASsitT*.kf: tassitd*) and for floor
+-- seating (xdbsRAsit2T.kf: rasitd*). Every seat type is wired now, including
+-- CUSHION and BATH, which take the RA-set clips.
+local SHIPPED_ENTERS = { tassitd1 = true, tassitd2 = true,
+                         rasitd1 = true, rasitd2 = true }
 local missingEnter, wrongEnter = {}, {}
 for name, seatType in pairs(seats.SEAT_TYPE) do
     local group = seats.enterAnimFor(seats.TARGET_KIND.SEAT, seatType)
-    if name == 'CUSHION' then
-        if group ~= nil then wrongEnter[#wrongEnter + 1] = 'CUSHION should have none' end
-    elseif not group then missingEnter[#missingEnter + 1] = name
+    if not group then missingEnter[#missingEnter + 1] = name
     elseif not SHIPPED_ENTERS[group] then
         wrongEnter[#wrongEnter + 1] = name .. '=' .. group
     end
 end
-check('every chair-like seat has a sit-down clip', #missingEnter == 0,
+check('every seat type has a sit-down clip', #missingEnter == 0,
       table.concat(missingEnter, ','))
+
+-- The RA-set groups are absent from the beast skeleton, which gets its
+-- transitions from xdbsTASsitTkna.kf under the tassit* names. Every RA group
+-- the tables name must therefore have a fallback, or a beast player gets
+-- silence on those seats.
+local raGroups = {}
+for _, seatType in pairs(seats.SEAT_TYPE) do
+    for _, g in ipairs({ seats.enterAnimFor(seats.TARGET_KIND.SEAT, seatType),
+                         seats.exitAnimFor(seats.TARGET_KIND.SEAT, seatType) }) do
+        if g and g:match('^rasit') then raGroups[g] = true end
+    end
+end
+local noFallback = {}
+for g in pairs(raGroups) do
+    local alts = seats.groupFallbacks(g)
+    if not alts or #alts == 0 then noFallback[#noFallback + 1] = g end
+end
+check('every RA-set transition has a beast-skeleton fallback',
+      #noFallback == 0, table.concat(noFallback, ','))
 check('every sit-down clip is one that ships', #wrongEnter == 0,
       table.concat(wrongEnter, ','))
 

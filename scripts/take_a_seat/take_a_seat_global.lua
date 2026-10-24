@@ -39,10 +39,37 @@ local function onSitTeleport(eventData)
 
     local pos = eventData.position
     local yaw = eventData.yaw
+
+    -- Two kinds of yaw arrive here.
+    --
+    -- The raycast fallback sends the FURNITURE's yaw, and a chair model's
+    -- forward points at its own backrest, so it needs the half turn.
+    --
+    -- The authored solver path sends the world facing it already solved. Its
+    -- contract says in terms not to negate it or add 180 again, so adding the
+    -- flip there would seat the player backwards on every covered seat.
+    local rotation = eventData.yawAbsolute and yaw or (yaw + math.pi)
     player:teleport(player.cell, pos,
-        { rotation = util.transform.rotateZ(yaw + math.pi) })
+        { rotation = util.transform.rotateZ(rotation) })
 
     player:sendEvent('SitAnimStart', {})
+end
+
+---Put the player down after the stand-up clip.
+---
+---Position only: the facing is left alone on purpose. Snapping the camera
+---round at the end of a stand-up is disorienting, and the facing is not a
+---safety matter -- the position is.
+local function onSitStandTeleport(eventData)
+    if not player then
+        player = findPlayer()
+        if not player then
+            print("[sit-global] ERROR: player not found")
+            return
+        end
+    end
+    if not eventData.position then return end
+    player:teleport(player.cell, eventData.position)
 end
 
 local function onSitRestoreChair(eventData)
@@ -63,7 +90,8 @@ return {
         onPlayerAdded = onPlayerAdded,
     },
     eventHandlers = {
-        SitTeleport     = onSitTeleport,
-        SitRestoreChair = onSitRestoreChair,
+        SitTeleport       = onSitTeleport,
+        SitStandTeleport  = onSitStandTeleport,
+        SitRestoreChair   = onSitRestoreChair,
     }
 }
