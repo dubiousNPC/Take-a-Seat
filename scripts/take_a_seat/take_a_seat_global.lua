@@ -6,6 +6,12 @@ local util  = require('openmw.util')
 
 local player = nil
 
+-- The stand-up move, while one is running; nil the rest of the time, which is
+-- what keeps onUpdate below free. Declared up here because onSitTeleport
+-- clears it -- below its first use it would be an assignment to an undeclared
+-- global, which OpenMW's script sandbox rejects outright.
+local move = nil
+
 local function findPlayer()
     for _, actor in ipairs(world.activeActors) do
         if actor.type == types.Player then
@@ -20,6 +26,9 @@ local function onPlayerAdded(p)
 end
 
 local function onSitTeleport(eventData)
+    -- A new sit cancels any stand-up move still in flight; otherwise the tween
+    -- would keep teleporting the player back out of the seat they just took.
+    move = nil
     if not player then
         player = findPlayer()
         if not player then
@@ -55,12 +64,16 @@ local function onSitTeleport(eventData)
     player:sendEvent('SitAnimStart', {})
 end
 
----Put the player down after the stand-up clip.
+---Put the player down on a point the player script has already validated.
 ---
----Position only: the facing is left alone on purpose. Snapping the camera
+---With `from` and `duration` this glides; without them it is one teleport. The
+---stand-up clip carries no root motion, so the glide is the only thing that
+---takes the player out of the chair, and it is short on purpose.
+---
+---Position only, either way: the facing is left alone. Snapping the camera
 ---round at the end of a stand-up is disorienting, and the facing is not a
 ---safety matter -- the position is.
-local function onSitStandTeleport(eventData)
+local function onSitPlacePlayer(eventData)
     if not player then
         player = findPlayer()
         if not player then
@@ -68,8 +81,36 @@ local function onSitStandTeleport(eventData)
             return
         end
     end
-    if not eventData.position then return end
-    player:teleport(player.cell, eventData.position)
+    local to = eventData.position
+    if not to then return end
+
+    if not (eventData.from and eventData.duration and eventData.duration > 0) then
+        move = nil
+        player:teleport(player.cell, to)
+        return
+    end
+    move = { from = eventData.from, to = to, elapsed = 0,
+             duration = eventData.duration }
+end
+
+---Advance the stand-up move.
+---
+---The only per-frame code in this mod, and it is one nil check wide unless a
+---move is actually running -- a tween is the one thing a timer cannot do
+---smoothly. It eases out, so a short move reads as a step away from the chair
+---rather than a slide.
+local function onUpdate(dt)
+    if not move then return end
+    move.elapsed = move.elapsed + dt
+    local t = move.elapsed / move.duration
+    if t >= 1 then
+        local to = move.to
+        move = nil
+        player:teleport(player.cell, to)
+        return
+    end
+    local eased = 1 - (1 - t) * (1 - t)
+    player:teleport(player.cell, move.from + (move.to - move.from) * eased)
 end
 
 local function onSitRestoreChair(eventData)
@@ -88,10 +129,11 @@ end
 return {
     engineHandlers = {
         onPlayerAdded = onPlayerAdded,
+        onUpdate      = onUpdate,
     },
     eventHandlers = {
         SitTeleport       = onSitTeleport,
-        SitStandTeleport  = onSitStandTeleport,
+        SitPlacePlayer    = onSitPlacePlayer,
         SitRestoreChair   = onSitRestoreChair,
     }
 }

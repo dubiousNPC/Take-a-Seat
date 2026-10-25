@@ -14,6 +14,9 @@ local storage = require('openmw.storage')
 local I      = require('openmw.interfaces')
 local time   = require('openmw_aux.time')
 local ui     = require('openmw.ui')
+-- Named omwdebug, not debug: Lua's own debug library is a standard global
+-- and shadowing it inside a 1300-line file is a trap for the next reader.
+local omwdebug = require('openmw.debug')
 local seats  = require('scripts.take_a_seat.sitAnim_shared')
 local safety = require('scripts.take_a_seat.seat_safety')
 
@@ -131,6 +134,29 @@ local SEAT_CLUSTER_DIST = 6
 
 local FATIGUE_TICK_RATE   = 1     -- seconds
 local FATIGUE_TICK_AMOUNT = 20
+
+-- Seat keeper. The player's collision capsule keeps standing height while
+-- seated, so at a table it overlaps the table top and the physics solver
+-- resolves that by pushing the player up -- reported in game as drifting back
+-- onto the tabletop, quickly.
+--
+-- Turning the player's collision off while seated removes the cause rather
+-- than correcting the symptom, and is what the COLLISION_OFF setting does.
+-- This keeper is the backstop for when it is off, unavailable, or something
+-- else re-enabled collision mid-sit: it compares the player's position with
+-- the committed seat point a few times a second and re-asserts it only when it
+-- has actually moved. Usually zero teleports, and nothing per frame.
+local SEAT_KEEP_RATE      = 0.25   -- seconds between checks while seated
+local SEAT_KEEP_TOLERANCE = 6      -- units of drift tolerated before a re-assert
+
+-- Standing up. The stand-up clip carries no root motion, so without this the
+-- player stands in place for a second and then snaps to the exit point --
+-- reported as jarring. Gliding over the first third of the clip reads as
+-- stepping out of the chair instead. Short on purpose: a long slide looks like
+-- floating, and the whole point of one validated teleport was not to drag the
+-- player through geometry.
+local EXIT_GLIDE_TIME  = 0.35      -- seconds
+local EXIT_GLIDE_PROBE_Z = 40      -- torso height for the path check
 
 local FLAT_RAYS    = { { z = 10 }, { z = 30 }, { z = 55 } }
 local PITCHED_RAYS = {
@@ -815,6 +841,7 @@ end
 
 local SETTINGS_PAGE  = "TakeASeat"
 local SETTINGS_GROUP = "SettingsTakeASeatCamera"
+local SEATING_GROUP  = "SettingsTakeASeatSeating"
 local CAMERA_TAG     = "TakeASeat"
 
 -- ---------------------------------------------------------------------------
@@ -894,7 +921,44 @@ I.Settings.registerGroup {
     },
 }
 
+I.Settings.registerGroup {
+    key              = SEATING_GROUP,
+    page             = SETTINGS_PAGE,
+    l10n             = "none",
+    name             = "Sitting",
+    description      = "How the mod holds you in a seat, and how it puts you"
+                    .. " down when you get up.",
+    permanentStorage = true,
+    order            = 1,
+    settings = {
+        {
+            key         = "COLLISION_OFF",
+            name        = "Hold the seat with collision off",
+            description = "Your collision is standing height even when you are"
+                        .. " sitting, so at a table the engine pushes you up"
+                        .. " onto it. Turning collision off while seated"
+                        .. " removes that push. It is restored when you stand,"
+                        .. " and on loading a save made while seated. Turn this"
+                        .. " off to keep collision on; the mod will then nudge"
+                        .. " you back into the seat instead, which can be"
+                        .. " visible.",
+            renderer    = "checkbox",
+            default     = true,
+        },
+        {
+            key         = "EXIT_GLIDE",
+            name        = "Glide out of the seat",
+            description = "The stand-up animation does not move you, so without"
+                        .. " this you snap to your feet position at the end of"
+                        .. " it. Turn off for the snap.",
+            renderer    = "checkbox",
+            default     = true,
+        },
+    },
+}
+
 local cameraSettings   = storage.playerSection(SETTINGS_GROUP)
+local seatingSettings  = storage.playerSection(SEATING_GROUP)
 local cameraOffsetHeld = false
 
 local function clearCameraOffset()
@@ -982,6 +1046,70 @@ local function unsubscribeRefresh()
     end
 end
 
+-- ---------------------------------------------------------------------------
+-- HOLDING THE SEAT
+-- ---------------------------------------------------------------------------
+
+local collisionDisabled = false    -- disabled BY US, not by the player's own TCL
+local seatHoldPos       = nil
+local seatHolds         = 0        -- re-asserts this sit, for the log
+local stopSeatKeeper    = nil
+
+---Turn the player's collision off for the duration of a sit, or back on.
+---
+---`debug.toggleCollision` is the engine's own TCL and is not reference
+---counted, so this only ever toggles a state it checked first, and only
+---restores what it took: a player who turned collision off themselves keeps it
+---off when they stand up. The flag is saved with the game, so a save made
+---while seated restores collision on load rather than leaving someone
+---noclipping with no idea why.
+local function setSeatCollision(enabled)
+    if enabled then
+        if not collisionDisabled then return end
+        if not omwdebug.isCollisionEnabled() then omwdebug.toggleCollision() end
+        collisionDisabled = false
+        return
+    end
+    if collisionDisabled then return end
+    if not seatingSettings:get("COLLISION_OFF") then return end
+    if omwdebug.isCollisionEnabled() then
+        omwdebug.toggleCollision()
+        collisionDisabled = true
+    end
+end
+
+local function stopHoldingSeat()
+    if stopSeatKeeper then stopSeatKeeper() end
+    stopSeatKeeper = nil
+    seatHoldPos    = nil
+    if DEBUG and seatHolds > 0 then
+        print(string.format("[sit] held the seat %d time(s) this sit", seatHolds))
+    end
+    seatHolds = 0
+end
+
+---Keep the player on the seat point they were placed on.
+---
+---Runs only while seated -- started here, stopped on standing -- so there is
+---no idle timer and nothing per frame. With collision off there is nothing to
+---correct and this never teleports; with collision on it catches the solver
+---pushing the player out of a seat tucked under a table.
+local function startHoldingSeat(pos)
+    seatHoldPos = pos
+    seatHolds   = 0
+    if stopSeatKeeper then return end
+    stopSeatKeeper = time.runRepeatedly(function()
+        if not (isSitting and seatHoldPos) then return end
+        local drift = (self.position - seatHoldPos):length()
+        if drift <= SEAT_KEEP_TOLERANCE then return end
+        seatHolds = seatHolds + 1
+        if DEBUG then
+            print(string.format("[sit] drifted %.1f units; re-seating", drift))
+        end
+        core.sendGlobalEvent('SitPlacePlayer', { position = seatHoldPos })
+    end, SEAT_KEEP_RATE)
+end
+
 ---@param chairPos table|nil nil means do not move the furniture
 ---@param yawAbsolute boolean|nil true when `yaw` is already the world facing
 local function commitSit(furniture, chairPos, sitPos, yaw, yawAbsolute)
@@ -1018,6 +1146,10 @@ local function commitSit(furniture, chairPos, sitPos, yaw, yawAbsolute)
     isSitting      = true
     sitAnimStarted = false
     resolveActive  = false
+    -- Collision off first, then hold the point it was placed on: the first
+    -- removes the push, the second catches it if the first did not happen.
+    setSeatCollision(false)
+    startHoldingSeat(sitPos)
     lockControls()
     subscribeRefresh()
     applyCameraOffset()
@@ -1142,13 +1274,6 @@ local function beginSit(furniture)
     end)
 end
 
----Put the player down on a validated point, once, after the stand-up clip.
----
----This is the "slight push off the mesh and back to the ground". It is one
----teleport, not a lerp: lerping a player through interior geometry is what
----risks the stuck case the gate exists to prevent, and the clip already
----supplies the visual motion. Done at the END of the clip so the animation
----never fights a moving root.
 ---The recorded origin, but only while it still means something.
 ---
 ---A script or a door can move the player to another cell while they sit. The
@@ -1161,6 +1286,20 @@ local function usableOrigin()
     return standingPos
 end
 
+---Put the player down on a validated point, over the stand-up clip.
+---
+---The point is validated BEFORE anything moves, which is what makes a glide
+---safe here: it is a short move to somewhere already known to be floor, on the
+---navmesh, in this room. The clip carries no root motion, so this is what
+---takes the player out of the chair at all -- without it they stand in place
+---for a second and then snap, which is how it read in game.
+---
+---Collision is still off at this point (see setSeatCollision) and goes back on
+---when the glide lands, so nothing fights the move on its way out either. With
+---collision on -- the setting turned off, or another mod holding it -- the
+---straight line is checked first, and a blocked line falls back to the snap.
+---
+---@return number seconds the move will take
 local function commitStandPoint(furniture)
     local from = self.position
     -- Re-validated now rather than trusted from sit time: a door may have
@@ -1182,13 +1321,31 @@ local function commitStandPoint(furniture)
         -- back to: no teleport is safer than a teleport to an unchecked point.
         if DEBUG then print("[sit] stand-up: no validated point (" ..
                             tostring(what) .. "); not moving the player") end
-        return
+        return 0
     end
+
+    local glide = seatingSettings:get("EXIT_GLIDE") and true or false
+    if glide and not collisionDisabled then
+        -- Collision is on, so a glide could drag the player into something.
+        -- One synchronous ray along the path at torso height decides it.
+        glide = safety.pathClear(SAFETY, from, target, EXIT_GLIDE_PROBE_Z,
+                                 furniture)
+        if not glide and DEBUG then
+            print("[sit] stand-up path is blocked; snapping instead")
+        end
+    end
+
     if DEBUG then
-        print(string.format("[sit] stand-up to %s, %.1f units", tostring(what),
-                            (target - from):length()))
+        print(string.format("[sit] stand-up to %s, %.1f units, %s",
+            tostring(what), (target - from):length(),
+            glide and 'gliding' or 'snapping'))
     end
-    core.sendGlobalEvent('SitStandTeleport', { position = target })
+    core.sendGlobalEvent('SitPlacePlayer', {
+        position = target,
+        from     = glide and from or nil,
+        duration = glide and EXIT_GLIDE_TIME or nil,
+    })
+    return glide and EXIT_GLIDE_TIME or 0
 end
 
 local function stopSitting()
@@ -1224,10 +1381,25 @@ local function stopSitting()
     end
     currentFurniture, originalChairPos, originalChairRot = nil, nil, nil
 
-    playOneShot(exitGroup, 'exit', function()
-        commitStandPoint(furnitureRef)
-        releaseControls()
+    -- The move starts WITH the clip, not after it. The clip has no root
+    -- motion, so the two cannot fight, and a stand-up that finishes where it
+    -- started and then teleports is the jarring version of this.
+    stopHoldingSeat()
+    local moveTime = commitStandPoint(furnitureRef)
+
+    -- Collision comes back when the move has landed, and not before: with it
+    -- off, neither the seat nor the table can push the player mid-glide. If
+    -- the glide was skipped this is simply the next tick.
+    async:newUnsavableSimulationTimer(moveTime + 0.05, function()
+        -- Sat down again inside the glide window: that sit has already taken
+        -- collision off, and this timer belongs to the stand-up before it.
+        -- Restoring here would hand collision back while seated and leave the
+        -- keeper nudging the player for the rest of the sit.
+        if isSitting then return end
+        setSeatCollision(true)
     end)
+
+    playOneShot(exitGroup, 'exit', releaseControls)
     currentKind, currentSubType = nil, nil
 end
 
@@ -1357,7 +1529,11 @@ local function onSave()
         chair = { furniture = currentFurniture, position = originalChairPos,
                   rotation = originalChairRot }
     end
-    return { controlsLocked = controlsLocked, chair = chair }
+    -- Saved so a load can put collision back. Without this, a save made while
+    -- seated could restore into a game where the player's collision is off
+    -- with nothing on screen to say why.
+    return { controlsLocked = controlsLocked, chair = chair,
+             collisionDisabled = collisionDisabled or nil }
 end
 
 local function onLoad(data)
@@ -1370,8 +1546,20 @@ local function onLoad(data)
     standingPos, standingFloorZ, standingCell = nil, nil, nil
     plannedExit, seatedFacing = nil, nil
     resolveToken = resolveToken + 1
+    stopHoldingSeat()
     unsubscribeRefresh()
     clearCameraOffset()
+
+    -- Collision first, before anything else can go wrong: if this save was
+    -- made while seated with collision off, the player gets it back now rather
+    -- than discovering it by walking through a wall. Claimed only if this mod
+    -- is the one that took it.
+    if data and data.collisionDisabled then
+        collisionDisabled = true
+        setSeatCollision(true)
+    else
+        collisionDisabled = false
+    end
     if data and data.controlsLocked then
         controlsLocked = true
         releaseControls()

@@ -44,10 +44,49 @@ python3 tools/kf_root_offsets.py animations/xbase_anim/xSitting2.kf \
 `POSE_DELTA` in `sitAnim_shared.lua` is therefore empty, and wired in anyway so
 that a correction measured later takes effect.
 
-## Getting up (v0.40)
+## Staying in the seat (v0.41)
 
-Sitting down and standing up are now symmetric: both end in exactly one
-teleport to a point that was checked first.
+The player's collision capsule is standing height whether they are standing or
+sitting. At a table that capsule overlaps the table top, the physics solver
+resolves the overlap by pushing the player up, and in game that reads as
+drifting back onto the tabletop -- quickly, as reported.
+
+Two answers, in this order:
+
+1. **Collision off while seated** (`COLLISION_OFF`, default on). Removes the
+   cause: no overlap to resolve, nothing to push, and no per-tick work at all.
+   `debug.toggleCollision` is the engine's own TCL and is not reference
+   counted, so the mod only ever toggles a state it checked first and only
+   gives back what it took -- a player who turned collision off themselves
+   keeps it off. The flag is saved with the game, so a save made while seated
+   restores collision on load instead of leaving someone noclipping.
+2. **The seat keeper**, for when collision is on -- the setting turned off, or
+   another mod holding it. Every `SEAT_KEEP_RATE` (0.25s) while seated it
+   compares the player's position with the seat point they were placed on and
+   re-asserts it only past `SEAT_KEEP_TOLERANCE` (6 units). Started on sitting
+   and stopped on standing, so there is no idle timer, and zero teleports when
+   there is nothing to correct.
+
+Not done: the per-frame re-teleport the Procedural Chatter seating uses. It
+works by brute force and costs a teleport every frame of every seated NPC.
+
+## Getting up (v0.41)
+
+Sitting down and standing up are symmetric: both end on a point that was
+checked first. Standing up glides there rather than snapping, because the
+stand-up clip carries no root motion -- the player stood up in place and then
+jumped, which is how v0.40 read in game.
+
+The move starts **with** the clip, not after it, and takes `EXIT_GLIDE_TIME`
+(0.35s) with an ease-out, so it reads as stepping away from the chair rather
+than sliding. The clip not moving the root is what makes this safe: the two
+cannot fight. Collision is still off while it runs and comes back when the move
+lands, so neither the seat nor the table can push the player mid-glide. With
+collision on, the straight line is checked with one ray at torso height first
+(`pathClear`), and a blocked line falls back to the snap -- a glide through a
+closed door is worse than the teleport it replaces.
+
+`EXIT_GLIDE` turns the glide off for the snap.
 
 The stand-up point, best first:
 

@@ -1,173 +1,138 @@
-# Take a Seat v0.40
+# Take a Seat v0.41
 
-Stages 4 and 5 of the rework proposal: the exit commit, the recorded origin,
-stand-up on movement input, the pre-sit gate and the tipped-furniture check.
-v0.39's authored placement from the solver pack is unchanged and still the
-primary positioner.
+Both things reported from in-game testing of v0.40: the drift back onto the
+tabletop, and the jarring exit. Stage 6 of the rework proposal, and a revision
+of stage 4's commit.
 
-## Standing up now ends somewhere that was checked first
+## Stage 6: the tabletop drift
 
-One teleport, in the stand-up clip's completion callback — never during the
-clip, so the animation is not fighting a moving root — and the movement
-override is released after it rather than before.
+Confirmed necessary in game — the player drifts back onto the table, quickly.
+The cause is not the placement: the authored root is right. The player's
+collision capsule is standing height whether they are standing or sitting, so
+at a table it overlaps the table top, and the physics solver resolves the
+overlap by pushing the player up.
 
-The stand-up point, best first:
+**Collision now comes off while seated** (setting `COLLISION_OFF`, default on).
+That removes the cause instead of correcting the symptom: no overlap to
+resolve, nothing to push, and no per-tick work of any kind.
 
-1. **Where the player was standing when they sat.** The strongest candidate
-   there is: they walked to it. Re-validated at the moment they get up, not
-   trusted from sit time, because a door may have closed or something may have
-   been dropped there since.
-2. **Forward of the seated facing**, 48 units — out of the chair, not into its
-   back.
-3. **The seat itself**, which is where the player already is.
+`debug.toggleCollision` is the engine's own TCL and is not reference counted,
+so the mod is careful with it:
 
-Each one is grounded with a physics ray that ignores the furniture, snapped to
-the navmesh for the player's **own** agent bounds
-(`types.Actor.getPathfindingAgentBounds` — a point something smaller can stand
-on says nothing about the player), and rejected if the floor it lands on is
-more than 35 units from the floor the player sat down from. That last one is
-the stairwell: a point directly under the seat, on the storey below. The chosen
-point is lifted 8 units clear of the floor, which is the "slight push off the
-mesh" — the engine settles the player onto the floor instead of resolving an
-overlap with the seat.
+- it only ever toggles a state it checked first, and only gives back what it
+  took — **a player who turned collision off themselves keeps it off** when
+  they stand up;
+- the flag is saved with the game, so a save made while seated **restores
+  collision on load** rather than leaving someone noclipping with nothing on
+  screen to say why;
+- the restore after standing is skipped if the player has already sat down
+  again inside the glide window, which would otherwise hand collision back
+  while seated.
 
-**If nothing validates, nothing moves.** That is deliberately the old
-behaviour: no teleport is safer than a teleport to an unchecked point.
+**The seat keeper** is the backstop for when collision is on — the setting
+turned off, or another mod holding it. Every 0.25s while seated it compares the
+player's position with the seat point they were placed on, and re-asserts it
+only past 6 units of drift. Started on sitting, stopped on standing, so there
+is no idle timer and nothing per frame; with collision off it never fires at
+all. `DEBUG = true` prints how many times it had to hold the seat.
 
-It is a teleport and not a lerp, in or out. Lerping a player through interior
-geometry is the stuck case this whole stage exists to prevent, and the
-transition clips already supply the visual motion. The NPC-side lerp in the
-Procedural Chatter pair exists because NPCs walk to their seat under AI; the
-player does not.
+Not done, deliberately: the per-frame re-teleport the Procedural Chatter
+seating uses for this. It works by brute force, and costs a teleport every
+frame of every seated actor.
 
-**A cell change while seated drops the recorded origin.** A script or a door
-can move the player mid-sit, and those coordinates in a different cell may well
-find a floor and a navmesh — somewhere the player has never been.
+## The exit was jarring, and this is why
 
-## Refuse, don't cope
+v0.40 teleported at the *end* of the stand-up clip. The clip carries no root
+motion, so the player stood up in place for a second and then jumped to their
+feet position. Correct, and horrible.
 
-The same validation runs **before** the sit, while the player is still standing
-somewhere they reached on foot. The old order committed the teleport and dealt
-with the consequences; this is what makes "stuck in a cramped interior"
-unreachable rather than mitigated.
+**The move now starts with the clip** and takes 0.35s with an ease-out, so it
+reads as stepping away from the chair. The clip not moving the root is exactly
+what makes this safe rather than a fight: there is nothing for the glide to
+contradict.
 
-A seat is refused when:
+It stays a short, bounded move to a point validated **before** anything moved —
+not a lerp through unknown geometry, which is the stuck case the v0.40 gate
+exists to prevent. Collision is still off while it runs and comes back when it
+lands, so neither the seat nor the table can push the player mid-glide. With
+collision on (setting off, or another mod holding it) the straight line is
+checked with one ray at torso height first, and a blocked line falls back to
+the snap — a glide through a closed door is worse than the teleport it
+replaces.
 
-- **the furniture is tipped over** — local up tilted more than about 45° from
-  world up. The player path had no such test and would happily seat you on a
-  chair lying on its side. This check costs no rays at all, and runs first.
-- **no stand-up candidate validates** — in practice, the player is not standing
-  on anything (levitating, swimming) and the invented candidates have no
-  navmesh either.
+`EXIT_GLIDE` (default on) turns it off for the old snap.
 
-A refusal shows a message rather than doing nothing, because a sit that
-silently fails reads as a broken mod.
+The tween runs in the global script, which is the only place that can move the
+player, as `onUpdate` — one nil check wide unless a move is actually running. A
+tween is the one thing a timer cannot do smoothly, and 0.35s of it per stand-up
+is bounded. Everything else in this mod is still event- or timer-driven.
 
-Being honest about the scope: no route is *pathfound* from the seat to the exit,
-and nothing is checked above the seat. The first is unnecessary while the exit
-is a place the player stood moments ago; the second was v0.37's overhead escape,
-which is exactly what put players on tabletops.
+## Two settings, one new group
 
-The whole gate is synchronous — physics rays and one navmesh query — so it adds
-**no async round-trip** to a sit, no timer, and cannot be overtaken by a second
-Activate mid-chain.
+Settings → Take a Seat → **Sitting**:
 
-## Movement input stands you up
+- **Hold the seat with collision off** (default on) — the fix above.
+- **Glide out of the seat** (default on) — the exit move.
 
-The reported "safer but feels bad or unresponsive" was real: while seated the
-movement override swallows input, so pushing forward did nothing. The override
-stays — releasing it lets a seated player slide out of the chair before
-anything notices — and the first movement press now stands them up in the same
-frame. `registerActionHandler` fires on value change, so this costs nothing per
-frame and adds no timer. A press during the sit-down clip is ignored, so the
-transition is not cut in half.
+## Three checkers were not checking
 
-**The action names are not guessed.** `input.actions` is the engine's own
-registry of named actions, so only names this build actually has are bound, and
-the mod prints one line at load saying what it bound and what was missing:
+All three found by planting the fault they should have caught, after writing
+the feature that needed them.
 
-```
-[sit] stand up on movement: MoveForward, MoveBackward, MoveLeft, MoveRight, Jump
-```
+**`ctxcheck` had stopped resolving requires at all.** v0.40 switched its
+stripper to the one-pass `luastrip`, which blanks string literals — and a
+module name *is* a string literal, so `local x = require('openmw.debug')` came
+out as `require('    ')`. Zero aliases meant zero module checks and zero member
+checks, and it printed "0 issues" having looked at nothing. api_sweep
+documents this exact trap and avoids it with a separate comments-only strip for
+the alias scan; ctxcheck now does the same, reports how many requires it
+resolved (**33**), and refuses to report clean if it ever finds none again.
+With it fixed, a planted `openmw.debug` require in the global script is
+reported as `openmw.debug is ['player'], file is global` — which is also how
+the player-script use in this release was verified.
 
-A handler registered against a name the engine does not have would never fire
-and never say so — the same silent failure as an animation group a `.kf` does
-not declare. If this build has no named actions at all, the line says that and
-Activate still stands you up.
+**`ctxcheck` passed any module it had no policy for.** The Cod3x plugin's
+AVAILABILITY table covers 25 modules; a module outside it was silently allowed
+in every context. It now falls back to each stub file's own
+`---@omw-context` line, and reports `NO-POLICY` for anything neither source
+covers rather than passing it.
 
-**Please check that line in your log on the first run** — it is the one thing
-here that cannot be verified without the engine.
-
-## New file
-
-`scripts/take_a_seat/seat_safety.lua` holds all of the above decision-making
-and **requires no openmw module**: `nearby`, `util` and the agent-bounds getter
-are passed in. That is what lets `tools/test_exit_safety.lua` drive it against
-a scripted world — a cramped interior, a stairwell, a hole in the floor, a
-navmesh that answers across the room, a knocked-over chair — rather than
-asserting on comments.
-
-Two things from the Procedural Chatter pair deliberately **not** copied: its
-per-frame re-teleport while seated, and its `pcall` density.
-
-## Fixed: a checker had stopped reading halfway through a file
-
-Found while making the injected modules checkable, and worth more than the
-feature that found it.
-
-`api_sweep`, `globalcheck` and `ctxcheck` each stripped Lua comments **before**
-string literals. `sitAnim_shared.lua` contains this, which is ordinary Lua:
-
-```lua
-error(("[take a seat] %s references unknown seat type '%s' -- " ..
-       "add it to SEAT_TYPE or remove the row"):format(label, name))
-```
-
-The `--` inside that string starts a comment as far as a comment-first regex is
-concerned, so the rest of the line was deleted — **including the quote that
-closed the string**. Every double quote after that point then paired up one
-position out, and whole stretches of real code were blanked as "string
-contents" and never checked. `anim.PRIORITY` on line 191 was invisible to
-`api_sweep`; planting `anim.PRIORITYY` there was reported as clean.
-
-`tools/luastrip.py` replaces all three strippers with one left-to-right pass
-that tracks state, handles long strings and long comments, and preserves
-offsets and line numbers. With it, the planted `anim.PRIORITYY` is reported.
-
-## api_sweep now checks injected modules too
-
-Dependency injection is what makes `seat_safety.lua` and
-`buildAnimProfiles(anim)` testable, and it also hid their engine calls from the
-sweep: `env.nearby.castRay` parses as an ordinary table field. Worse than
-elsewhere, because the mocks in the tests define whatever name the code asks
-for, so a misspelling would pass the tests too.
-
-`api_sweep` now takes an `INJECTED` table naming those prefixes and checks them
-like any other API use — proven by planting `env.nearby.castRayy`, which it
-reports. A file listed with a prefix it no longer uses fails an assertion
-instead of quietly checking nothing; that assertion is also what caught the
-stripper bug.
+**`globalcheck` never checked writes.** It reported undeclared *reads*, and
+root-level accidental globals — but an indented `move = nil` inside a function,
+with `local move` fifty lines further down, matched neither. Valid Lua, so
+luacheck passes it; OpenMW's script sandbox rejects assignment to an undeclared
+global, so it would have raised on the first stand-up. I wrote exactly that bug
+in the global script while building the tween. Now reported as
+`WRITE-BEFORE-DECL`, with table-constructor keys (`{ position = target }`)
+excluded by brace depth rather than by guessing.
 
 ## Tests
 
-`tools/run_check_all.py`: **15 jobs, 0 failed, 0 skipped.**
+`tools/run_check_all.py`: **16 jobs, 0 failed, 0 skipped.**
 
-- `tools/test_exit_safety.lua` — new, 25 checks: the tipped-chair threshold and
-  that it costs no rays, the ordinary case and its probe budget, the stairwell,
-  the hole in the floor, the navmesh answering across the room, no navmesh at
-  all (origin still allowed; invented candidates refused), candidate order and
-  fall-through, the exit direction following the seated facing, the agent bounds
-  being named in the query, and an older build with no navmesh query at all.
-- `tools/test_targeting.lua` — the gate is the only caller of `commitSit`, the
-  teleport is in the clip callback and happens once, controls release after it,
-  the cell-change drop, and the action binding going through `input.actions`.
+- `tools/test_standup.lua` — new: loads the real global script and calls its
+  real handlers. Both yaw conventions, the furniture only moving when it
+  should, a bare place being one teleport, the glide arming nothing by itself,
+  easing front-loading the movement, never overshooting, landing *exactly* on
+  the validated point, stopping itself, costing a handful of teleports rather
+  than a stream, a new sit cancelling a glide in flight, and a zero duration
+  snapping instead of dividing by zero.
+- `tools/test_exit_safety.lua` — adds the glide path check, with a ray mock
+  that answers a downward probe and a level probe differently, because
+  `pathClear` and `groundBelow` ask the same engine function different
+  questions.
+- `tools/test_targeting.lua` — the move starting with the clip rather than in
+  its callback, the keeper stopping before the player is moved, collision
+  restored on a timer sized by the move and only there, the re-sit guard, the
+  keeper's tolerance and its "only while seated" early-out, that collision is
+  only taken when it was on, that the setting is honoured, and that the state
+  is saved and restored.
 
 ## Not in this release
 
-- **Stage 6, the capsule versus the tabletop.** Still needs drift measured in
-  game: sit at a table and watch whether the player creeps upward. If they do
-  not, that stage is unnecessary, which is the best outcome.
 - The pack still covers four seat types (`backed_chair`, `bench`, `stool`,
   `barstool`); CUSHION, BATH, THRONE and SINGLE_SEAT_BENCH take the raycast
   path.
 - Beds remain off (`BEDS_ENABLED = false`).
+- The v0.40 log line is still worth a look on first run — it reports which
+  movement actions the stand-up is bound to.

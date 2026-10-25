@@ -72,13 +72,54 @@ def load_policy(cod3x_dir):
     valid = set(re.findall(r"^\s+\[?'?(\w+)'?\]?\s*=\s*true,",
                            re.search(r'local VALID_CONTEXTS = \{(.*?)\n\}', src, re.S).group(1),
                            re.M))
+
+    # Second source: each stub file's own `---@omw-context` line. The plugin's
+    # AVAILABILITY table does not cover every module -- openmw.debug is one it
+    # misses -- and a module with no policy was silently allowed in any
+    # context. `openmw/debug.lua` says `---@omw-context player`, so a global
+    # script requiring it was a fault this checker passed. Stub annotations fill
+    # the gaps; the plugin table still wins where both exist.
+    stub_dir = os.path.join(cod3x_dir, 'openmw')
+    for path in sorted(glob.glob(os.path.join(stub_dir, '*.lua'))):
+        mod = 'openmw.' + os.path.splitext(os.path.basename(path))[0]
+        if mod in availability:
+            continue
+        head = open(path, encoding='utf-8', errors='replace').read(400)
+        m = re.search(r'---@omw-context (\S+)', head)
+        if not m:
+            continue
+        ctxs = set()
+        for t in m.group(1).split('|'):
+            ctxs |= EXPAND.get(t, {t})
+        ctxs &= valid
+        if ctxs:
+            availability[mod] = ctxs
+
     return availability, members, valid, sets
 
 
 def strip_lua(src):
     """Comments and string literals out, in one pass -- see tools/luastrip.py
-    for why this is not a pair of regexes."""
+    for why this is not a pair of regexes.
+
+    Use this for scanning CODE. Not for finding requires: a module name is a
+    string literal, so this blanks the very thing the alias scan reads. Doing
+    that left this checker with zero aliases and therefore zero module and
+    member checks, reporting "0 issues" having looked at nothing -- the same
+    trap api_sweep documents. `strip_comments_only` is for that scan.
+    """
     return luastrip.strip(src)
+
+
+def strip_comments_only(src):
+    """Comments out, string literals INTACT, for the require scan."""
+    src = re.sub(r'--\[(=*)\[.*?\]\1\]', ' ', src, flags=re.S)
+    return re.sub(r'--[^\n]*', '', src)
+
+
+# Every file's alias count, so main can refuse to report clean after finding
+# no requires anywhere -- which is what a broken alias scan looks like.
+assert_aliases = []
 
 
 def check_file(path, availability, members, valid):
@@ -99,8 +140,12 @@ def check_file(path, availability, members, valid):
     for t in tokens:
         concrete |= EXPAND.get(t, {t})
 
-    aliases = dict(re.findall(r"local (\w+)\s*=\s*require\('([\w.]+)'\)", code))
+    # From the source with strings intact: the module name IS a string.
+    aliases = dict(re.findall(
+        r"""local (\w+)\s*=\s*require\s*\(?\s*['\"]([\w.]+)['\"]\s*\)?""",
+        strip_comments_only(src)))
     requires = set(aliases.values())
+    assert_aliases.append((path, len(aliases)))
 
     if raw == 'none':
         omw = sorted(r for r in requires if r.startswith('openmw'))
@@ -110,7 +155,16 @@ def check_file(path, availability, members, valid):
 
     for mod in sorted(requires):
         allowed = availability.get(mod)
-        if allowed and not concrete <= allowed:
+        if allowed is None:
+            # Not "fine": unchecked. A module with no policy from either source
+            # used to pass in any context, which is how a player-only module
+            # required from a global script could come back clean.
+            if mod.startswith('openmw') or mod.startswith('openmw_aux'):
+                issues.append(('NO-POLICY',
+                               f'{mod} has no context policy in Cod3x; '
+                               f'checked nothing for it'))
+            continue
+        if not concrete <= allowed:
             issues.append(('MODULE', f'{mod} is {sorted(allowed)}, file is {raw}'))
 
     # member-level: openmw.core / openmw.storage / openmw.interfaces
@@ -153,7 +207,13 @@ def main(argv):
             for kind, detail in issues:
                 print(f"    {kind:<18} {detail}")
             total += len(issues)
-    print(f"\n{len(files)} file(s) checked, {total} issue(s)")
+    seen = sum(n for _, n in assert_aliases)
+    if files and seen == 0:
+        print("ctxcheck: no openmw requires found in any file -- the alias scan "
+              "is broken, not the code; refusing to report clean")
+        return 2
+    print(f"\n{len(files)} file(s) checked, {seen} require(s) resolved, "
+          f"{total} issue(s)")
     return 1 if total else 0
 
 

@@ -55,8 +55,19 @@ local env = {
     },
     nearby = {
         COLLISION_TYPE = { World = 1, Door = 2, HeightMap = 4, Actor = 8 },
-        castRay = function(from, _to, _options)
+        castRay = function(from, to, _options)
             world.rays = world.rays + 1
+            -- A downward ray is a ground probe and finds the floor; a
+            -- level one is a path probe and finds only a wall, if there
+            -- is one. Modelling both matters: pathClear and groundBelow
+            -- ask the same function different questions.
+            if math.abs(to.z - from.z) < math.abs(to.y - from.y)
+               + math.abs(to.x - from.x) then
+                if world.wall then
+                    return { hit = true, hitPos = vec(from.x, from.y, from.z) }
+                end
+                return { hit = false }
+            end
             if world.floorZ == nil or isHole(from) then return { hit = false } end
             return { hit = true, hitPos = vec(from.x, from.y, world.floorZ),
                      hitNormal = vec(0, 0, 1) }
@@ -80,6 +91,7 @@ end
 
 local function reset()
     world.floorZ, world.navOffset, world.navNowhere = 0, nil, false
+    world.wall = false
     world.holes, world.rays, world.navQueries = {}, 0, 0
 end
 
@@ -260,6 +272,25 @@ local r11, exit11 = safety.sitRejectReason(env, furniture(1), seat, 0, origin, 0
 env.nearby.findNearestNavMeshPosition = saved
 check('no navmesh query means the ground ray decides, not a refusal',
       r11 == nil and exit11 ~= nil, tostring(r11))
+
+-- ---------------------------------------------------------------------------
+-- the glide path
+-- ---------------------------------------------------------------------------
+-- Only asked when collision is ON during the stand-up move: with collision off
+-- nothing can obstruct the player, and with it on a glide through a closed
+-- door is worse than the snap it replaces.
+reset()
+world.floorZ = 0
+check('a clear line is clear',
+      safety.pathClear(env, vec(0, 0, 40), vec(0, 48, 8), 40, nil) == true)
+
+-- A wall between the two: the ray at torso height hits, so the glide is
+-- refused and the caller snaps instead.
+reset()
+world.wall = true
+check('a blocked line is not',
+      safety.pathClear(env, vec(0, 0, 40), vec(0, 48, 8), 40, nil) == false)
+check('the probe is one ray', world.rays == 1, world.rays)
 
 print(fails == 0 and 'ALL PASS' or (fails .. ' FAILURES'))
 if fails > 0 then os.exit(1) end

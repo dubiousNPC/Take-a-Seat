@@ -142,6 +142,20 @@ function M.validateStandPoint(env, candidate, ignore, floorZ, navRequired)
     return nav + env.util.vector3(0, 0, M.EXIT_LIFT)
 end
 
+---Is the straight line between two points clear at `height` above them?
+---
+---Only asked when the player's collision is ON during the stand-up move: with
+---collision off nothing can obstruct them, and with it on a glide through a
+---closed door is worse than the snap it replaces. The furniture is ignored,
+---because the line starts inside it.
+---@return boolean
+function M.pathClear(env, from, to, height, ignore)
+    local lift = env.util.vector3(0, 0, height)
+    local res = env.nearby.castRay(from + lift, to + lift,
+        { ignore = ignore, collisionType = floorTypes(env) })
+    return not (res and res.hit)
+end
+
 ---Stand-up candidates, best first.
 ---
 ---The recorded origin comes first because it is the strongest candidate there

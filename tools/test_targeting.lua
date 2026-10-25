@@ -227,19 +227,78 @@ check('the restore is sent only when a placement was recorded',
 -- ---------------------------------------------------------------------------
 -- stand-up: the gate's companion
 -- ---------------------------------------------------------------------------
--- The exit teleport happens in the one-shot's completion callback, not during
--- the clip: a root that moves while the stand-up plays is what the animation
--- would be fighting. And it is ONE teleport, not a lerp -- lerping a player
--- through interior geometry is the stuck case the gate exists to prevent.
-check('the stand-up point is committed from the exit clip callback',
-      src:match("playOneShot%(exitGroup, 'exit', function%(%).-commitStandPoint") ~= nil)
-check('controls are released after the teleport, not before',
-      src:match('commitStandPoint%(furnitureRef%)%s*\n%s*releaseControls%(%)') ~= nil)
-check('the stand-up sends exactly one teleport event',
-      select(2, src:gsub('SitStandTeleport', '')) == 1)
-check('the global handles it', globalSrc:find('SitStandTeleport%s*=') ~= nil)
+-- v0.40 teleported at the END of the stand-up clip, and in game that read as
+-- jarring: the clip carries no root motion, so the player stood up in place
+-- and then jumped. The move now starts WITH the clip -- the two cannot fight,
+-- precisely because the clip does not move the root -- and the controls are
+-- still held until the clip finishes.
+local stand = src:match('(local function stopSitting.-\nend\n)')
+assert(stand, 'could not extract stopSitting')
+local moveAt = stand:find('commitStandPoint%(furnitureRef%)')
+local clipAt = stand:find("playOneShot%(exitGroup, 'exit'")
+check('the move is started from stopSitting, not from the clip callback',
+      moveAt ~= nil and clipAt ~= nil and moveAt < clipAt,
+      tostring(moveAt) .. ' vs ' .. tostring(clipAt))
+check('controls are still released on the clip ending',
+      stand:find("playOneShot%(exitGroup, 'exit', releaseControls%)") ~= nil)
+check('the seat keeper is stopped before the player is moved',
+      stand:find('stopHoldingSeat%(%)') ~= nil
+      and stand:find('stopHoldingSeat%(%)') < moveAt)
+
+-- Collision goes back on when the move has landed, and not before: with it off
+-- neither the seat nor the table can push the player mid-glide.
+check('collision is restored on a timer sized by the move',
+      stand:find('newUnsavableSimulationTimer%(moveTime %+ 0%.05') ~= nil)
+check('and that is the only place it is restored during a stand-up',
+      select(2, stand:gsub('setSeatCollision%(true%)', '')) == 1)
+-- Sitting down again inside the glide window would otherwise hand collision
+-- back while seated, and leave the keeper nudging for the rest of the sit.
+check('a sit inside the glide window keeps collision off',
+      stand:match('newUnsavableSimulationTimer.-if isSitting then return end.-setSeatCollision%(true%)') ~= nil)
+
+-- One event for both jobs -- the glide and the keeper's re-assert -- so there
+-- is one place in the global script that moves the player.
+check('the player is placed through SitPlacePlayer',
+      src:find('SitPlacePlayer') ~= nil
+      and src:find('SitStandTeleport') == nil)
+check('the global handles it', globalSrc:find('SitPlacePlayer%s*=') ~= nil)
 check('the global teleports position only, leaving the facing alone',
-      globalSrc:match('onSitStandTeleport.-player:teleport%(player%.cell, eventData%.position%)') ~= nil)
+      globalSrc:match('onSitPlacePlayer.-player:teleport%(player%.cell, to%)') ~= nil)
+check('a glide needs both a start point and a duration, or it snaps',
+      globalSrc:find('if not %(eventData%.from and eventData%.duration and eventData%.duration > 0%) then') ~= nil)
+check('a new sit cancels a glide still in flight',
+      globalSrc:match('local function onSitTeleport.-move = nil') ~= nil)
+
+-- ---------------------------------------------------------------------------
+-- holding the seat
+-- ---------------------------------------------------------------------------
+-- Reported in game: the player drifts back onto the tabletop, quickly. The
+-- cause is the standing-height collision capsule overlapping the table top,
+-- so the first answer is to take collision out of the fight; the keeper is the
+-- backstop for when that is off or something else re-enabled it.
+check('collision is turned off on commit',
+      src:match('local function commitSit.-setSeatCollision%(false%)') ~= nil)
+check('and the seat point is held',
+      src:match('local function commitSit.-startHoldingSeat%(sitPos%)') ~= nil)
+check('the keeper only runs while seated',
+      src:match('stopSeatKeeper = time%.runRepeatedly.-if not %(isSitting and seatHoldPos%) then return end') ~= nil)
+check('it re-asserts only past a tolerance',
+      src:find('if drift <= SEAT_KEEP_TOLERANCE then return end') ~= nil)
+check('the keeper is a timer, not a frame handler',
+      src:find('onFrame') == nil and src:find('onUpdate') == nil)
+
+-- The collision toggle is the engine's own TCL and is not reference counted,
+-- so the mod may only give back what it took.
+check('collision is only taken when it was on',
+      src:match('if omwdebug%.isCollisionEnabled%(%) then\n%s*omwdebug%.toggleCollision%(%)\n%s*collisionDisabled = true') ~= nil)
+check('a player who turned collision off themselves keeps it off',
+      src:find('if not collisionDisabled then return end') ~= nil)
+check('the setting is honoured',
+      src:find('seatingSettings:get%("COLLISION_OFF"%)') ~= nil)
+check('the state is saved',
+      src:find('collisionDisabled = collisionDisabled or nil') ~= nil)
+check('and restored on load',
+      src:match('if data and data%.collisionDisabled then.-setSeatCollision%(true%)') ~= nil)
 
 -- A cell change while seated invalidates the recorded origin: those
 -- coordinates in a different cell are somewhere the player has never been.

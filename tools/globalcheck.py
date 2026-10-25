@@ -31,6 +31,18 @@ KNOWN LIMITS
   * Globals assigned before use (`x = 1` at file scope) count as declared,
     which is correct Lua but is also how accidental globals are created. Those
     are reported separately under ACCIDENTAL GLOBALS.
+
+WRITES BEFORE DECLARATION
+  Reads were all this checked at first, and that left a hole big enough to
+  ship through: an indented `move = nil` inside a function, where `local move`
+  appears fifty lines FURTHER DOWN the file. Valid Lua, so luacheck passes it;
+  not a read, so the read sweep missed it; not at line start with no leading
+  whitespace, so the accidental-global regex missed it too. OpenMW's script
+  sandbox rejects assignment to an undeclared global outright, so it would have
+  raised on the first stand-up. Now reported as WRITE-BEFORE-DECL.
+
+  Assignments inside a table constructor (`{ position = target }`) are not
+  writes, and are excluded by brace depth rather than by guessing.
 """
 import re
 import sys
@@ -109,6 +121,46 @@ def declared_names(code: str) -> set:
     return names
 
 
+# A statement-position assignment: start of a line, bare name, single `=`.
+# `t.x = 1`, `t[i] = 1` and `==` are all excluded by the pattern itself.
+ASSIGN_STMT = re.compile(r'^[ \t]*([A-Za-z_][\w]*)\s*=(?!=)', re.M)
+
+
+def first_declaration_offsets(code: str) -> dict:
+    """name -> offset of its first declaration, for the write check."""
+    first = {}
+    for pat in DECL_PATTERNS:
+        for m in pat.finditer(code):
+            for part in m.group(1).split(','):
+                part = part.strip()
+                if re.fullmatch(r'[A-Za-z_][\w]*', part):
+                    if part not in first or m.start() < first[part]:
+                        first[part] = m.start()
+    return first
+
+
+def writes_before_declaration(code: str, declared: set) -> dict:
+    """Assignments to a name whose `local` comes later, or never."""
+    first = first_declaration_offsets(code)
+    out = {}
+    for m in ASSIGN_STMT.finditer(code):
+        name = m.group(1)
+        if name in KEYWORDS or name in BUILTINS:
+            continue
+        # Inside a table constructor this is a key, not a statement.
+        if code.count('{', 0, m.start()) > code.count('}', 0, m.start()):
+            continue
+        decl = first.get(name)
+        if decl is not None and decl < m.start():
+            continue
+        # A root-level assignment with no local anywhere is the accidental
+        # global the other bucket already reports; do not report it twice.
+        if decl is None and name in declared:
+            continue
+        out.setdefault(name, []).append(code[:m.start()].count('\n') + 1)
+    return out
+
+
 def check(path: str):
     src = open(path, encoding='utf-8', errors='ignore').read()
     code = strip_lua(src)
@@ -125,7 +177,14 @@ def check(path: str):
         line = code[:m.start()].count('\n') + 1
         bucket = accidental if name in root_assigned else undeclared
         bucket.setdefault(name, []).append(line)
-    return undeclared, accidental
+
+    early = writes_before_declaration(code, declared)
+    for name in list(early):
+        # Already named as an accidental global at file scope: one report is
+        # enough.
+        if name in accidental:
+            del early[name]
+    return undeclared, accidental, early
 
 
 def main(argv):
@@ -194,8 +253,8 @@ def main(argv):
 
     total = 0
     for path in sorted(targets):
-        undeclared, accidental = check(path)
-        if not undeclared and not accidental:
+        undeclared, accidental, early = check(path)
+        if not undeclared and not accidental and not early:
             continue
         print(path)
         for name, lines in sorted(undeclared.items()):
@@ -206,7 +265,12 @@ def main(argv):
         for name, lines in sorted(accidental.items()):
             shown = ', '.join(str(x) for x in lines[:6])
             print(f"    GLOBAL-WRITE {name:<23} line {shown}  (missing `local`)")
-    print(f"\n{len(targets)} file(s) checked, {total} undeclared read(s)")
+        for name, lines in sorted(early.items()):
+            shown = ', '.join(str(x) for x in lines[:6])
+            print(f"    WRITE-BEFORE-DECL {name:<18} line {shown}"
+                  f"  (assigned before any `local {name}`)")
+            total += len(lines)
+    print(f"\n{len(targets)} file(s) checked, {total} finding(s)")
     return 1 if total else 0
 
 
