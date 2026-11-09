@@ -29,32 +29,16 @@
 
 local M = {}
 
--- Ground probe: start a little above the candidate so a point resting exactly
--- on the floor still has somewhere to cast from, and reach far enough down to
--- find the floor under a seat but not the storey below.
 M.GROUND_PROBE_UP   = 24
 M.GROUND_PROBE_DOWN = 200
 
--- How far a candidate may differ in Z from the floor the player was standing
--- on and still count as the same ground. 35 is the tolerance the Procedural
--- Chatter seating uses for the same job; it accepts a step or a rug and
--- rejects the stairs below and the balcony above.
 M.GROUND_Z_TOLERANCE = 35
 
--- findNearestNavMeshPosition searches a box, so it will happily return a point
--- across the room. A match is only a match if it is close to what was asked
--- for.
 M.NAV_SEARCH_EXTENT = 96
 M.NAV_MATCH_RADIUS  = 48
 
--- A knocked-over chair has its local up tipped away from world up. 0.7 is
--- about 45 degrees.
 M.UP_Z_MIN = 0.7
 
--- Stand-up placement. Forward of the seated facing is out of the chair, and
--- the small lift is the "slight push off the mesh": it puts the player just
--- above the floor so the engine settles them onto it instead of resolving an
--- overlap with the seat.
 M.EXIT_FORWARD = 48
 M.EXIT_LIFT    = 8
 
@@ -65,19 +49,11 @@ function M.isUpright(env, furniture)
     return up.z >= M.UP_Z_MIN, up.z
 end
 
----Collision types that count as floor. Actors are left out on purpose: an NPC
----standing where the player wants to get up is not the floor, and is not a
----reason to refuse the sit either -- they move.
 local function floorTypes(env)
     local C = env.nearby.COLLISION_TYPE
     return env.util.bitOr(env.util.bitOr(C.World, C.Door), C.HeightMap)
 end
 
----The floor under a point, or nil.
----
----A physics ray, not a rendering ray: this asks what the player will stand on,
----which is the collision world. It is also synchronous, so the whole check
----costs no async round-trips and cannot be overtaken by a new Activate.
 ---@return any|nil position
 function M.groundBelow(env, pos, ignore)
     local from = pos + env.util.vector3(0, 0, M.GROUND_PROBE_UP)
@@ -88,21 +64,11 @@ function M.groundBelow(env, pos, ignore)
     return res.hitPos
 end
 
----The nearest navmesh point to `pos`, if there is one close enough.
----
----On the navmesh means the engine's own pathfinder believes an actor of the
----player's size can stand and walk there, which is a much stronger statement
----than "a ray found a floor".
 ---@return any|nil position
 function M.navMeshNear(env, pos)
     local find = env.nearby.findNearestNavMeshPosition
     if not find then return pos end     -- older build: do not block sitting
     local e = M.NAV_SEARCH_EXTENT
-    -- agentBounds identifies WHICH navmesh to answer from, and the one that
-    -- matters is the one built for an actor the player's size -- a point a rat
-    -- can stand on is not an answer about the player. It is passed explicitly
-    -- rather than left to a default, because the API documents no default for
-    -- it.
     local found = find(pos, {
         searchAreaHalfExtents = env.util.vector3(e, e, e),
         agentBounds = env.agentBounds and env.agentBounds() or nil,
@@ -114,14 +80,6 @@ function M.navMeshNear(env, pos)
     return found
 end
 
----Is this a point the player can be put down on?
----
----`navRequired` is false only for the point the player was standing on before
----they sat: they walked there, so the navmesh has nothing to add and a gap in
----it -- a small interior, a mod-added room -- must not refuse a sit that
----plainly works. The navmesh answer is still used when there is one, so the
----point gets snapped onto it. For a point this module invented, the navmesh is
----the whole proof and is required.
 ---@param floorZ number|nil the floor they were standing on before sitting
 ---@param navRequired boolean|nil default true
 ---@return any|nil position, string|nil reason
@@ -142,12 +100,6 @@ function M.validateStandPoint(env, candidate, ignore, floorZ, navRequired)
     return nav + env.util.vector3(0, 0, M.EXIT_LIFT)
 end
 
----Is the straight line between two points clear at `height` above them?
----
----Only asked when the player's collision is ON during the stand-up move: with
----collision off nothing can obstruct them, and with it on a glide through a
----closed door is worse than the snap it replaces. The furniture is ignored,
----because the line starts inside it.
 ---@return boolean
 function M.pathClear(env, from, to, height, ignore)
     local lift = env.util.vector3(0, 0, height)
@@ -156,13 +108,6 @@ function M.pathClear(env, from, to, height, ignore)
     return not (res and res.hit)
 end
 
----Stand-up candidates, best first.
----
----The recorded origin comes first because it is the strongest candidate there
----is: the player was standing on it moments ago, so it is reachable, on the
----floor, and inside the same room. Forward of the seated facing is next --
----out of the chair rather than into its back -- and the seat itself is the
----last resort, which is where the player already is.
 ---@return table[] candidates each { pos = position, what = string }
 function M.exitCandidates(env, seatPos, seatYaw, origin)
     local out = {}
@@ -191,11 +136,6 @@ function M.chooseStandPoint(env, seatPos, seatYaw, origin, ignore, floorZ)
     return nil, table.concat(tried, ', ')
 end
 
----Why this sit should be refused, or nil to go ahead.
----
----Called while the player is still standing. A refusal here is the whole point
----of the module: it is the difference between "stuck in a cramped interior is
----mitigated" and "unreachable".
 ---@return string|nil reason, any|nil plannedExit, string|nil exitWhat
 function M.sitRejectReason(env, furniture, seatPos, seatYaw, origin, floorZ)
     local upright, upZ = M.isUpright(env, furniture)

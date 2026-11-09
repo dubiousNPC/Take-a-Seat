@@ -83,13 +83,6 @@ local SEAT_EXIT_ANIM = resolveByType({
 -- ---------------------------------------------------------------------------
 -- ANIMATION GROUP FALLBACKS
 -- ---------------------------------------------------------------------------
--- A group a skeleton does not define plays nothing, silently. The beast
--- skeleton gets its chair transitions from xdbsTASsitTkna.kf, which carries
--- the tassit* groups, so the RA-set groups used by floor seating resolve to
--- their chair equivalents there rather than to nothing.
---
--- Checked per actor with animation.hasGroup at play time, not here: the same
--- install serves human, female and beast skeletons.
 local GROUP_FALLBACKS = {
     rasitd1  = { "tassitd1" },
     rasitd2  = { "tassitd2", "tassitd1" },
@@ -111,27 +104,6 @@ end
 -- ---------------------------------------------------------------------------
 -- POSE DELTA
 -- ---------------------------------------------------------------------------
--- The authored solver roots are solved for the reference pose pcdbssit5, which
--- is dbssit5 (confirmed by the pack's author). Every seat type here plays a
--- different clip, so the obvious worry is that a root solved for one pose puts
--- the body somewhere else in another.
---
--- Measured, not assumed. tools/kf_root_offsets.py reads the root and pelvis
--- tracks straight out of the shipped .kf files. Across every seated clip this
--- mod plays -- dbssit2/4/5/6/8 (xdbssitting.kf), dbssitting24 (xSitting2.kf)
--- and rasit6 (xdbsRAsitting1.kf) -- Bip01 and Bip01 Pelvis have the SAME
--- translation (2.904, 0, 0) and the SAME rotation, to 0.000 units and 0.00
--- degrees. Morrowind animates bone rotations, not bone translations: these
--- poses first differ at the spine (26-59 degrees of lean), which is the
--- per-seat variety, not a placement error. The hips land in the same place
--- whichever clip plays, so pcdbssit5-solved roots are valid for all of them
--- and this table is empty because the correction measures zero.
---
--- If one SEAT TYPE ever sits high, low or fore/aft, the correction belongs
--- here, keyed by its animation group -- one entry fixes every record that uses
--- that clip. Per-record offsets are the wrong tool and the pack says so: check
--- for a double-applied provider or animation correction first.
---
 -- Values are actor-space: x right, y forward, z up, in game units.
 local POSE_DELTA = {
     -- dbssit4 = { x = 0, y = 0, z = 0 },
@@ -144,16 +116,10 @@ end
 -- ---------------------------------------------------------------------------
 -- AUTHORED SOLVER PROFILES
 -- ---------------------------------------------------------------------------
--- Model-keyed authored geometry, generated from the solver pack. This is the
--- primary positioner; the raycast chain in take_a_seat.lua is the fallback for
--- models the pack does not cover.
 local solver = require('scripts.take_a_seat.solver_profiles')
 
 local SOLVER_CONTRACT = 3
 
--- A contract bump changes the meaning of root/yaw. Refusing to read it is the
--- documented behaviour, and silently misreading coordinates is the failure it
--- exists to prevent.
 local solverUsable = solver and solver.contractVersion == SOLVER_CONTRACT
 if not solverUsable then
     print(("[take a seat] solver_profiles.lua reports contract %s, expected %d; "
@@ -190,24 +156,6 @@ local TARGET_KIND = {
 local function buildAnimProfiles(anim)
     local P, B, BG = anim.PRIORITY, anim.BLEND_MASK, anim.BONE_GROUP
 
-    -- `priority` takes either one value for every bone group or a table
-    -- mapping bone group to priority (openmw.animation.playBlended). Split it,
-    -- because the legs and the upper body want opposite things:
-    --
-    --   LEGS carry the pose. They must outrank what the engine plays by
-    --   itself -- Movement, Jump, Hit -- or the seated legs are replaced by a
-    --   walk cycle the moment anything nudges the player.
-    --
-    --   UPPER BODY should lose. A seated player still wants hit reactions, a
-    --   drawn weapon, a torch, and the conversation gestures other mods play
-    --   on the torso and arms. Procedural Chatter is the reference: it poses
-    --   seated NPCs at PRIORITY.Movement and then plays gestures on bone mask
-    --   14 (torso + both arms) at a higher priority, expecting the pose to
-    --   yield there. A pose held at one high priority across all four groups
-    --   blocks exactly that, which is what this mod did.
-    --
-    -- Bone groups left out of the table default to PRIORITY.Default, so all
-    -- four are always named.
     local function split(legs, upper)
         return {
             [BG.LowerBody] = legs,
@@ -217,18 +165,22 @@ local function buildAnimProfiles(anim)
         }
     end
 
-    -- Transitions outrank the idle on the legs: a stand-up is a leg movement
-    -- and it is competing with locomotion the instant controls come back.
-    -- Knockdown is the highest tier below Scripted, and Scripted is avoided
-    -- deliberately -- it pauses every animation on the actor that is not also
-    -- Scripted, which would freeze the very gestures the idle is making room
-    -- for (RESEARCH 3.2).
+    -- Transitions outrank the idle on the legs
     local TRANSITION_LEGS = P.Knockdown
     local TRANSITION_UPPER = P.Weapon
-    local IDLE_LEGS = P.Weapon
+    -- Block, NOT Weapon. The engine refuses to switch the camera to first
+    -- person while ANY animation state holds Hit, Weapon, Knockdown or Death
+    -- on any bone group (MWRender::Animation::upperBodyReady), and queues the
+    -- switch instead. A seated idle at Weapon held for the whole sit, so a
+    -- player seated in third person could not get back to first person until
+    -- they stood up - measured in OpenMW 0.52 on a chair, a bench and a
+    -- cushion. Block still outranks every engine leg state (Movement, Jump,
+    -- Hit, Weapon) and stays under the transitions' Knockdown, and the tuple
+    -- is not uniform, so a shield's uniform Block cannot erase it. The short
+    -- enter and exit clips may still block; a switch queued there resolves as
+    -- soon as they end.
+    local IDLE_LEGS = P.Block
     local IDLE_UPPER = P.Movement
-    -- A prone body's legs must never walk, so they stay at the top; the upper
-    -- body matches the seat idle so hits, weapons and torches still read.
     local BED_LEGS = P.Scripted
     local BED_UPPER = P.Movement
 
@@ -334,6 +286,7 @@ local BASE_SEATS = {
     ["furn_de_p_chair_01"]   = T.BACKED_CHAIR,
     ["furn_de_p_chair_02"]   = T.BACKED_CHAIR,
     ["furn_de_r_chair_03"]   = T.BACKED_CHAIR,
+    ["bm_ka_chair"]   = T.BACKED_CHAIR,
 
     -- bench
     ["furn_com_p_bench_01"]  = T.BENCH,
@@ -375,6 +328,9 @@ local BASE_SEATS = {
     ["furn_de_cushion_round_05"]  = T.CUSHION,
     ["furn_de_cushion_round_06"]  = T.CUSHION,
     ["furn_de_cushion_round_07"]  = T.CUSHION,
+
+    -- throne
+    ["bm_ka_throne"]  = T.THRONE,
 }
 
 -- ---------------------------------------------------------------------------
@@ -384,9 +340,9 @@ local BASE_SEATS = {
 local MOD_SEAT_DATABASE = {
     ["tamriel_data.esm"] = {
         -- throne
-        ["t_ayl_dngruin_f_throne_01"] = T.BACKED_CHAIR,
-        ["t_ayl_dngruin_f_chair_01"]  = T.BACKED_CHAIR,
-        ["t_ayl_dngruin_f_chair_02"]  = T.BACKED_CHAIR,
+        ["t_ayl_dngruin_f_throne_01"] = T.THRONE,
+        ["t_ayl_dngruin_f_chair_01"]  = T.THRONE,
+        ["t_ayl_dngruin_f_chair_02"]  = T.THRONE,
 
         -- backed_chair
         ["t_imp_furnm_chair01brown"]  = T.BACKED_CHAIR,

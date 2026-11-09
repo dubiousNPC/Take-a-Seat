@@ -5,6 +5,12 @@ Sit on furniture in OpenMW. Look at a seat and press Activate to sit; press Acti
 ## Requirements
 **REQUIRES AnimRefresh_V6**
 
+**REQUIRES "Use additional animation sources"** (OpenMW launcher; in
+`settings.cfg`, `[Game] use additional anim sources = true`). It is off by
+default, and without it OpenMW never loads this mod's `animations/` folders:
+you sit in the standing idle. The mod prints a hint naming the setting the
+first time a sitting clip is missing.
+
 OpenMW 0.49+. `scripts/SharedRay/SharedRay_v2.lua` and `scripts/AnimRefresh/AnimRefresh_v6.lua` are bundled shared services and version-guard themselves.
 
 Animations: the `xdbs*` sitting and transition clips, installed for all six skeleton folders (`xbase_anim`, `.1st`, `_female`, `_female.1st`, `kna`, `kna.1st`). `tools/check_anims.py` reports what each folder declares and whether every group the scripts play is reachable there.

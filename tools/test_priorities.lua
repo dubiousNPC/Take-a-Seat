@@ -32,6 +32,22 @@ local profiles = seats.buildAnimProfiles({ PRIORITY = P, BLEND_MASK = B, BONE_GR
 local seat = profiles[seats.TARGET_KIND.SEAT]
 check('a seat profile exists', type(seat) == 'table')
 
+-- the seated idle must leave the camera free --------------------------------
+-- MWRender::Animation::upperBodyReady() is false while ANY state holds one of
+-- these on any bone group, and a switch to first person is queued until it is
+-- true. The idle lasts the whole sit; at Weapon it held a third-person player
+-- there until they stood up (measured in OpenMW 0.52).
+local BLOCKS_POV = { [P.Hit] = 'Hit', [P.Weapon] = 'Weapon', [P.Knockdown] = 'Knockdown', [P.Death] = 'Death' }
+for kindName, kind in pairs({ seat = seats.TARGET_KIND.SEAT, misc = seats.TARGET_KIND.MISC }) do
+    local idle = profiles[kind] and profiles[kind].idle
+    local bad = {}
+    for bg, pr in pairs(idle and idle.priority or {}) do
+        if BLOCKS_POV[pr] then bad[#bad + 1] = BLOCKS_POV[pr] end
+    end
+    check(kindName .. ' idle leaves the view switch free (no Hit/Weapon/Knockdown/Death)', #bad == 0,
+          table.concat(bad, ','))
+end
+
 -- every phase names all four bone groups ------------------------------------
 -- A bone group left out of a priority table silently defaults to Default,
 -- which for the legs means locomotion wins and the pose is lost.

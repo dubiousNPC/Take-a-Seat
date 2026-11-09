@@ -75,6 +75,52 @@ check('the fallback re-enables both',
       log2.switches[3] == 'Controls=true' and log2.switches[4] == 'Jumping=true',
       table.concat(log2.switches, ','))
 
+-- Parkourwind FLOW: the sit yields it, BEFORE the shared override is taken and
+-- resumed AFTER it is released (FLOW's stand-down writes the same flag).
+local env3, log3, lock3, release3 = newEnv(true)
+local seq = {}
+env3.I.Controls.overrideMovementControls = function(v) seq[#seq + 1] = 'override ' .. tostring(v) end
+local owners = {}
+env3.I.Flow = {
+    yield = function(o) owners[o] = true; seq[#seq + 1] = 'yield' end,
+    resume = function(o) owners[o] = nil; seq[#seq + 1] = 'resume' end,
+}
+lock3()
+check('sitting yields FLOW before taking the override',
+      seq[1] == 'yield' and seq[2] == 'override true', table.concat(seq, ', '))
+check('FLOW is yielded while seated', owners.TakeASeat == true)
+release3()
+check('standing resumes FLOW after releasing the override',
+      seq[#seq] == 'resume' and seq[#seq - 1] == 'override false', table.concat(seq, ', '))
+check('FLOW is free after standing', owners.TakeASeat == nil)
+
+-- Jump stands the player up. In OpenMW 0.52 Jump is a TRIGGER, not a named
+-- action, and the binder only knew actions: "this build has no Jump".
+local bindSrc = src:match('(local STANDUP_ACTIONS = .-\nlocal function bindStandUpActions%(%).-\nend\n)')
+assert(bindSrc, 'could not extract bindStandUpActions')
+local stood, handlers, triggers = 0, {}, {}
+local benv = setmetatable({
+    isSitting = true, sitAnimStarted = true,
+    stopSitting = function() stood = stood + 1 end,
+    print = function() end,
+    async = { callback = function(_, f) return f end },
+    I = { UI = { getMode = function() return nil end } },
+    input = {
+        actions = { MoveForward = {}, MoveBackward = {}, MoveLeft = {}, MoveRight = {} },
+        triggers = { Jump = {}, Activate = {} },
+        registerActionHandler = function(k, f) handlers[k] = f end,
+        registerTriggerHandler = function(k, f) triggers[k] = f end,
+    },
+}, { __index = _G })
+local bind = load(bindSrc .. '\nreturn bindStandUpActions', 'bind', 't', benv)()
+bind()
+check('Jump is bound through the trigger when it is not an action', triggers.Jump ~= nil)
+if triggers.Jump then triggers.Jump() end
+check('the Jump trigger stands a seated player up', stood == 1, stood)
+benv.isSitting = false
+if triggers.Jump then triggers.Jump() end
+check('and does nothing when not seated', stood == 1, stood)
+
 -- Activation must stay with the engine: the Activate trigger is what stands
 -- the player up, so an override of it would strand the player in the chair.
 check('activation is never overridden', not src:find('overrideActivation'))

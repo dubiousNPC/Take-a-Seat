@@ -42,15 +42,6 @@ local resolveSitAnim = seats.animForSeat
 local DEBUG = false
 
 local SIT_LOOPS    = 999
-
--- Longest an enter/exit one-shot is allowed to hold up the sit. It is a
--- BACKSTOP for a clip that never reports an end, so it has to outlast the
--- real clips or it races them: the seated idle waits on this, and the exit
--- releases controls on it.
---
--- Measured out of the text keys in xdbsTASsitT.kf: tassitd1 1.000s,
--- tassitd2 0.967s, tassitu1 1.033s, tassitu2 1.033s. At the old 1.0s this
--- fired a hair BEFORE the stand-up finished.
 local ONE_SHOT_TIMEOUT = 1.5
 
 -- Per-target-kind priority and blend masks
@@ -66,12 +57,10 @@ local function profileFor(phase)
     return kind[phase]
 end
 
----The first group this actor's skeleton actually has: the named one, else a
----documented alternative. A group the skeleton lacks plays nothing and says
----nothing, and the beast skeleton carries the chair transitions under
----different names (xdbsTASsitTkna.kf).
 ---@param group string|nil
 ---@return string|nil
+local animHintGiven = false
+
 local function playableGroup(group)
     if not group then return nil end
     if anim.hasGroup(self, group) then return group end
@@ -86,6 +75,16 @@ local function playableGroup(group)
     end
     if DEBUG then
         print(string.format("[sit] no playable group for %s on this skeleton", group))
+    end
+    -- Almost always one cause: OpenMW loads this mod's animations/<skeleton>/
+    -- folders only with "Use additional animation sources" on, and it is off
+    -- by default. Measured in OpenMW 0.52: the player sat in the standing
+    -- idle and nothing said why. Said once, not under DEBUG.
+    if not animHintGiven then
+        animHintGiven = true
+        print("[sit] the sitting animations are missing on this skeleton. Turn on "
+            .. "'Use additional animation sources' in the OpenMW launcher "
+            .. "(settings.cfg: [Game] use additional anim sources = true).")
     end
     return nil
 end
@@ -135,26 +134,9 @@ local SEAT_CLUSTER_DIST = 6
 local FATIGUE_TICK_RATE   = 1     -- seconds
 local FATIGUE_TICK_AMOUNT = 20
 
--- Seat keeper. The player's collision capsule keeps standing height while
--- seated, so at a table it overlaps the table top and the physics solver
--- resolves that by pushing the player up -- reported in game as drifting back
--- onto the tabletop, quickly.
---
--- Turning the player's collision off while seated removes the cause rather
--- than correcting the symptom, and is what the COLLISION_OFF setting does.
--- This keeper is the backstop for when it is off, unavailable, or something
--- else re-enabled collision mid-sit: it compares the player's position with
--- the committed seat point a few times a second and re-asserts it only when it
--- has actually moved. Usually zero teleports, and nothing per frame.
 local SEAT_KEEP_RATE      = 0.25   -- seconds between checks while seated
 local SEAT_KEEP_TOLERANCE = 6      -- units of drift tolerated before a re-assert
 
--- Standing up. The stand-up clip carries no root motion, so without this the
--- player stands in place for a second and then snaps to the exit point --
--- reported as jarring. Gliding over the first third of the clip reads as
--- stepping out of the chair instead. Short on purpose: a long slide looks like
--- floating, and the whole point of one validated teleport was not to drag the
--- player through geometry.
 local EXIT_GLIDE_TIME  = 0.35      -- seconds
 local EXIT_GLIDE_PROBE_Z = 40      -- torso height for the path check
 
@@ -179,8 +161,6 @@ local CHAIR_PUSH_PROBE_ZS    = { -10, 35, 80 }
 
 local SIT_ANIM_WINDOW    = 0.05
 
--- An actor already on the seat. Checked against the furniture's own origin, so
--- it does not depend on the resolve stages having run.
 local SEAT_OCCUPIED_RADIUS = 30
 local SEAT_OCCUPIED_Z      = 90
 
@@ -225,9 +205,6 @@ local function castPiercing(from, to, maxPierces, onHit, done)
         left = left - 1
         nearby.asyncCastRenderingRay(async:callback(function(res)
             if not res or not res.hit then return done(nil) end
-            -- Three verdicts, not two: 'stop' ends the column without a
-            -- result. Piercing everything that is not sittable is what let a
-            -- ray travel through an NPC and pick the chair behind them.
             local verdict = onHit(res)
             if verdict == 'stop' then return done(nil) end
             if verdict then return done(res) end
@@ -267,15 +244,9 @@ local originalChairPos = nil
 local originalChairRot = nil
 local currentSitAnim   = nil
 local controlsLocked   = false
-
--- Where the player stood when they sat down, and the floor height there. The
--- strongest stand-up candidate there is: they walked to it, so it is on the
--- floor, in this room, and reachable. Captured before the sit, used after it.
 local standingPos    = nil
 local standingFloorZ = nil
 local standingCell   = nil
--- The exit the pre-sit gate validated, and the seated facing, kept so stand-up
--- has an answer even if the world changed while the player sat.
 local plannedExit    = nil
 local seatedFacing   = nil
 
@@ -300,18 +271,11 @@ local function tryFurnitureFastPath()
     if not result or not result.hit then return nil, false end
     local obj = result.hitObject
     if not obj or not obj:isValid() then return nil, false end
-    -- Looking at an actor means the player wants the actor, not the chair it is
-    -- sitting on. Blocked, not just "no furniture here": falling through to the
-    -- piercing search would find the chair behind them anyway.
     if isActorObject(obj) then return nil, true end
     if not isSittable(obj.recordId) then return nil, false end
     return obj, false
 end
 
----True when another actor is standing or sitting on this piece of furniture.
----Sitting down on top of a seated NPC put the player inside them and was the
----other half of why those NPCs could not be talked to.
----@param furniture any
 local function seatOccupied(furniture)
     local fp = furniture.position
     for _, actor in ipairs(nearby.actors) do
@@ -357,9 +321,6 @@ local function findFurnitureAsync(done)
     local found = {}
     forEachAsync(probes, function(probe, index, finished)
         castPiercing(probe[1], probe[2], MAX_PIERCES, function(res)
-            -- An actor ends this column. Without it the ray pierced a seated
-            -- NPC and returned the chair underneath them, so activating the
-            -- NPC sat the player down instead of opening dialogue.
             if isActorObject(res.hitObject) then return 'stop' end
             return res.hitObject ~= nil and isSittable(res.hitObject.recordId)
         end, function(res)
@@ -377,20 +338,9 @@ end
 -- ---------------------------------------------------------------------------
 -- AUTHORED PLACEMENT (primary)
 -- ---------------------------------------------------------------------------
--- The solver pack supplies a solved actor root and facing per model. When a
--- seat is covered, that IS the seat position: no rays, no seat-surface search,
--- no chair pushing, and no legacy -36/-7 offsets on top. The raycast chain
--- below runs only for models the pack does not cover.
---
--- Contract (pack README, contractVersion 3):
---     worldRoot = objectPosition + objectRotation * (root * scale)
---     worldYaw  = objectYaw + rad(slot.yaw)
--- with scale clamped to 0.25 .. 4.0 by the shared placement policy.
 
 local SCALE_MIN, SCALE_MAX = 0.25, 4.0
 
--- Record types furniture is authored as. The model has to come from the
--- record at runtime -- a plugin's raw MODL string is not a VFS path.
 local MODEL_TYPES = { 'Static', 'Activator', 'Container', 'Door', 'Light',
                       'Miscellaneous' }
 
@@ -413,20 +363,6 @@ local function clampScale(scale)
     return scale
 end
 
----Rotate an ACTOR-SPACE offset into the frame its yaw is measured in.
----
----This uses the engine's own actor-to-world map rather than a hand-rolled
----matrix: openmw.util documents `trans.move(pos) * trans.rotateZ(rot:getYaw())`
----as exactly that transform, so the sign convention is the engine's and cannot
----drift from `getObjectYaw`.
----
----The pack's own numbers settle it. Over all 150 slots that carry
----anchor/poseDelta, `anchor + rotateZ(rad(slot.yaw)) * poseDelta` reproduces
----the authored root to 0.0 units. The opposite handedness reproduces only the
----125 slots whose yaw is 0 or 180 -- where the sign cannot show -- and is out
----by up to 34.7 units on the other 25. tools/test_solver_profiles.lua checks
----this against every slot, so a flipped sign fails loudly instead of seating
----people a foot and a half off the chair.
 local function rotateYaw(v, yawRadians)
     return util.transform.rotateZ(yawRadians):apply(v)
 end
@@ -435,18 +371,6 @@ local function vec3(t)
     return util.vector3(t[1], t[2], t[3])
 end
 
----Object-local root for a chosen facing.
----
----`anchor` is the seat point with the pose offset taken out, and `poseDelta`
----is that offset in ACTOR space -- so the root for any facing is the anchor
----plus the delta rotated into that facing:
----
----    root = anchor + rotateZ(rad(yaw)) * poseDelta
----
----At the slot's own yaw this reproduces the authored root exactly (checked
----over all 150 anchored slots), so the formula runs for the authored facing
----too rather than being short-circuited: one rotation, and no second code
----path that could disagree with the data.
 ---@param slot table
 ---@param chosenYawDeg number|nil nil means use the slot's own yaw
 local function localRootFor(slot, chosenYawDeg)
@@ -455,15 +379,6 @@ local function localRootFor(slot, chosenYawDeg)
     return vec3(slot.anchor) + rotateYaw(vec3(slot.poseDelta), math.rad(yawDeg))
 end
 
----Target kind, sub-type and seated idle group for a piece of furniture.
----
----commitSit needs the first two to pose the actor. authoredPlacement needs the
----group to look up a reference-pose correction in sitAnim_shared's POSE_DELTA.
----That table is empty because the correction was measured at zero -- every
----seated clip this mod plays holds the root and pelvis in the same place, see
----the note above POSE_DELTA -- so this costs one table lookup and changes
----nothing, and it means a measured correction later takes effect instead of
----sitting in a table nothing reads.
 local function resolveSeatPose(furniture)
     local kind, subType = seats.classify(furniture.recordId)
     if not kind then
@@ -495,12 +410,6 @@ local function authoredPlacement(furniture, slot, chosenYawDeg)
     return position, worldYaw
 end
 
----The slot of a multi-seat profile nearest the player.
----
----41 of the 189 sit profiles are two-seat benches. Taking slot 1 regardless
----would walk the player to the far end of every bench they activate from the
----near end, which reads as the mod misplacing them. Distance to the authored
----seat points settles it, with no rays.
 ---@return table|nil slot
 local function nearestSlot(furniture, profile)
     if not profile or not profile.slots or #profile.slots == 0 then return nil end
@@ -519,11 +428,6 @@ local function nearestSlot(furniture, profile)
     return best
 end
 
----Facing choice for a slot that has more than one.
----
----`fixed` keeps the authored yaw. `two_sided` picks between the authored side
----and its opposite; `free` scans. Both use the open-space test Procedural
----Chatter's seating uses for the same question, batched into one set of rays.
 local FACING_SCAN_RANGE = 400
 local FACING_PROBE_Z    = 70
 
@@ -786,28 +690,6 @@ end
 -- CONTROL LOCK
 -- ---------------------------------------------------------------------------
 
--- CONTROL_SWITCH.Controls is the vanilla DisablePlayerControls gate, and it
--- covers more than walking: OpenMW refuses the inventory, the journal and the
--- quick keys while it is off. That is why no menu could be opened while
--- seated. Nothing else this mod did could cause it -- the only other switch it
--- touched was Jumping.
---
--- I.Controls.overrideMovementControls stops the engine processing movement
--- (including jump and sneak) and leaves the UI controls alone. The engine's own
--- documentation points the other way for the heavy case: "if movement should be
--- disallowed completely, consider to use types.Player.setControlSwitch
--- instead" -- so the switch is the sledgehammer and this is the tool.
---
--- Combat is overridden alongside it to keep the old behaviour: the Controls
--- switch blocked attacking as a side effect, and swinging a weapon out of a
--- seated pose was never intended. Activation is deliberately NOT overridden --
--- the Activate trigger is what stands the player up.
---
--- One caveat worth knowing: these overrides are a single global flag each, not
--- reference counted. If another mod overrides movement at the same time, the
--- release below clears its override too. The control switches had the same
--- problem, so this is not a regression, but it is a reason to release only on
--- the paths that locked.
 local function setControlLock(on)
     if I.Controls and I.Controls.overrideMovementControls then
         I.Controls.overrideMovementControls(on)
@@ -815,16 +697,32 @@ local function setControlLock(on)
             I.Controls.overrideCombatControls(on)
         end
     else
-        -- No Controls interface (built-in player scripts stripped or an older
-        -- build). Fall back to the switch, menus and all: being unable to walk
-        -- out of the chair matters more than being able to open a bag.
         types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.Controls, not on)
         types.Player.setControlSwitch(self, types.Player.CONTROL_SWITCH.Jumping, not on)
     end
 end
 
+-- Parkourwind FLOW reads any not-grounded player as mid-jump, and a seated
+-- player is placed on the seat with collision off, so it is never grounded:
+-- measured in OpenMW 0.52, FLOW sat in Airborne for the whole sit. Jump stands
+-- the player up, and with FLOW Airborne and that jump held, the stand-up glide
+-- beside a table is exactly where FLOW looks for a vault or a mantle. So the
+-- sit yields FLOW, from before the control lock until it is released after
+-- the exit clip. Optional: absent FLOW, nothing happens.
+--
+-- YIELD BEFORE THE LOCK. overrideMovementControls is one flag shared by every
+-- mod; FLOW releases its own hold on it as it stands down, and that write must
+-- land before ours, not over it.
+local FLOW_OWNER = 'TakeASeat'
+local function flowYield(on)
+    local F = I.Flow
+    if not (F and F.yield and F.resume) then return end
+    if on then F.yield(FLOW_OWNER) else F.resume(FLOW_OWNER) end
+end
+
 local function lockControls()
     if controlsLocked then return end
+    flowYield(true)
     setControlLock(true)
     controlsLocked = true
 end
@@ -833,6 +731,7 @@ local function releaseControls()
     if not controlsLocked then return end
     setControlLock(false)
     controlsLocked = false
+    flowYield(false)
 end
 
 -- ---------------------------------------------------------------------------
@@ -1020,12 +919,6 @@ local function onPerspectiveChanged()
     playSitIdle()
 end
 
--- AnimRefresh is bundled (and registered in take_a_seat.omwscripts), but a
--- newer copy from another mod wins the version guard, and a load order that
--- registers none of them leaves the interface absent. Then the sit pose is
--- dropped whenever the engine rebuilds the player model and nothing re-issues
--- it -- a silent loss of the mod's main effect, so say it once. Same shape
--- Bardcraft uses for the same dependency.
 local animRefreshWarned = false
 
 local function subscribeRefresh()
@@ -1055,14 +948,6 @@ local seatHoldPos       = nil
 local seatHolds         = 0        -- re-asserts this sit, for the log
 local stopSeatKeeper    = nil
 
----Turn the player's collision off for the duration of a sit, or back on.
----
----`debug.toggleCollision` is the engine's own TCL and is not reference
----counted, so this only ever toggles a state it checked first, and only
----restores what it took: a player who turned collision off themselves keeps it
----off when they stand up. The flag is saved with the game, so a save made
----while seated restores collision on load rather than leaving someone
----noclipping with no idea why.
 local function setSeatCollision(enabled)
     if enabled then
         if not collisionDisabled then return end
@@ -1088,12 +973,6 @@ local function stopHoldingSeat()
     seatHolds = 0
 end
 
----Keep the player on the seat point they were placed on.
----
----Runs only while seated -- started here, stopped on standing -- so there is
----no idle timer and nothing per frame. With collision off there is nothing to
----correct and this never teleports; with collision on it catches the solver
----pushing the player out of a seat tucked under a table.
 local function startHoldingSeat(pos)
     seatHoldPos = pos
     seatHolds   = 0
@@ -1114,20 +993,10 @@ end
 ---@param yawAbsolute boolean|nil true when `yaw` is already the world facing
 local function commitSit(furniture, chairPos, sitPos, yaw, yawAbsolute)
     currentFurniture = furniture
-    -- Only the fallback path moves the furniture, so only that path has
-    -- anything to restore. Recording a placement for an authored sit would
-    -- make stand-up -- and a load -- teleport the chair to where it already
-    -- is: a pointless world write that can nudge physics for no reason.
     originalChairPos = chairPos and furniture.position or nil
     originalChairRot = chairPos and furniture.rotation or nil
     currentKind, currentSubType, currentSitAnim = resolveSeatPose(furniture)
 
-    -- yawAbsolute tells the global script to apply the yaw verbatim. The
-    -- fallback path still sends the FURNITURE's yaw and relies on the global
-    -- script's + math.pi, because a chair model's forward points at its own
-    -- backrest. An authored yaw already encodes the seated facing, and the
-    -- pack says in terms not to add 180 again -- running it through that flip
-    -- would seat the player backwards on every covered seat.
     core.sendGlobalEvent('SitTeleport', {
         position     = sitPos,
         yaw          = yaw,
@@ -1146,8 +1015,6 @@ local function commitSit(furniture, chairPos, sitPos, yaw, yawAbsolute)
     isSitting      = true
     sitAnimStarted = false
     resolveActive  = false
-    -- Collision off first, then hold the point it was placed on: the first
-    -- removes the push, the second catches it if the first did not happen.
     setSeatCollision(false)
     startHoldingSeat(sitPos)
     lockControls()
@@ -1156,21 +1023,9 @@ local function commitSit(furniture, chairPos, sitPos, yaw, yawAbsolute)
     self.object:sendEvent('FPV_SetEyeDropOverride', { offset = -60 })
 end
 
----Refuse rather than cope.
----
----Run while the player is still standing: if there is no validated way back
----out of this seat, the sit does not happen. That is what makes "stuck in a
----cramped interior" unreachable instead of mitigated -- the old order
----committed the teleport and dealt with the consequences afterwards.
----
----The checks are synchronous physics rays and one navmesh query, so this adds
----no async round-trip to a sit and cannot be overtaken by a second Activate.
 ---@param yawAbsolute boolean|nil as passed to commitSit
 ---@return boolean committed
 local function gateAndCommit(furniture, chairPos, sitPos, yaw, yawAbsolute)
-    -- The global script adds half a turn to a fallback yaw, so the seated
-    -- facing -- which is the direction "out of the chair" -- is not the same
-    -- number on both paths.
     local facing = yawAbsolute and yaw or (yaw + math.pi)
 
     local reason, exit, what = safety.sitRejectReason(
@@ -1181,8 +1036,6 @@ local function gateAndCommit(furniture, chairPos, sitPos, yaw, yawAbsolute)
             print(string.format("[sit] refusing %s: %s",
                 tostring(furniture.recordId), reason))
         end
-        -- Said out loud on purpose. A sit that silently does nothing reads as
-        -- a broken mod; a sit that says why reads as a judgement.
         ui.showMessage("There is no room to get up from there.")
         return false
     end
@@ -1202,9 +1055,6 @@ local function beginSit(furniture)
         return
     end
 
-    -- Recorded before anything moves. `standingFloorZ` is what rejects a
-    -- stand-up candidate on the storey below: a floor 35+ units off the one
-    -- the player walked in on is a different floor.
     standingPos    = self.position
     standingCell   = self.cell
     standingFloorZ = nil
@@ -1222,9 +1072,6 @@ local function beginSit(furniture)
         end
     end)
 
-    -- Authored first. A covered model needs no rays for placement, does not
-    -- move the furniture, and cannot be thrown off by a seat-surface search
-    -- that found a table top.
     local model   = recordModelOf(furniture)
     local profile = seats.solverProfile(model)
     local slot    = nearestSlot(furniture, profile)
@@ -1274,37 +1121,15 @@ local function beginSit(furniture)
     end)
 end
 
----The recorded origin, but only while it still means something.
----
----A script or a door can move the player to another cell while they sit. The
----coordinates recorded in the old cell may well find a floor and a navmesh in
----the new one, and the player would be put down somewhere they have never
----been -- so the origin is dropped the moment the cell changes.
 local function usableOrigin()
     if not standingPos then return nil end
     if standingCell and self.cell ~= standingCell then return nil end
     return standingPos
 end
 
----Put the player down on a validated point, over the stand-up clip.
----
----The point is validated BEFORE anything moves, which is what makes a glide
----safe here: it is a short move to somewhere already known to be floor, on the
----navmesh, in this room. The clip carries no root motion, so this is what
----takes the player out of the chair at all -- without it they stand in place
----for a second and then snap, which is how it read in game.
----
----Collision is still off at this point (see setSeatCollision) and goes back on
----when the glide lands, so nothing fights the move on its way out either. With
----collision on -- the setting turned off, or another mod holding it -- the
----straight line is checked first, and a blocked line falls back to the snap.
----
 ---@return number seconds the move will take
 local function commitStandPoint(furniture)
     local from = self.position
-    -- Re-validated now rather than trusted from sit time: a door may have
-    -- closed, something may have been dropped there, the cell may have
-    -- changed. The gate's answer is the fallback, not the first choice.
     local origin = usableOrigin()
     local target, what = safety.chooseStandPoint(
         SAFETY, from, seatedFacing, origin, furniture,
@@ -1316,9 +1141,6 @@ local function commitStandPoint(furniture)
     standingPos, standingFloorZ, standingCell = nil, nil, nil
 
     if not target then
-        -- Nothing validated, so leave the player where the engine has them.
-        -- That is exactly the old behaviour, which is the right thing to fall
-        -- back to: no teleport is safer than a teleport to an unchecked point.
         if DEBUG then print("[sit] stand-up: no validated point (" ..
                             tostring(what) .. "); not moving the player") end
         return 0
@@ -1326,8 +1148,6 @@ local function commitStandPoint(furniture)
 
     local glide = seatingSettings:get("EXIT_GLIDE") and true or false
     if glide and not collisionDisabled then
-        -- Collision is on, so a glide could drag the player into something.
-        -- One synchronous ray along the path at torso height decides it.
         glide = safety.pathClear(SAFETY, from, target, EXIT_GLIDE_PROBE_Z,
                                  furniture)
         if not glide and DEBUG then
@@ -1353,8 +1173,6 @@ local function stopSitting()
     anim.cancel(self, currentSitAnim)
 
     local exitGroup = playableGroup(seats.exitAnimFor(currentKind, currentSubType))
-    -- Kept because the restore below clears the shared one, and
-    -- commitStandPoint needs it to ignore the seat when probing for floor.
     local furnitureRef = currentFurniture
 
     isSitting      = false
@@ -1362,12 +1180,6 @@ local function stopSitting()
     abortResolve()
     self.object:sendEvent('TakeASeat_Stood', {})
 
-    -- NOT released here. The exit clip holds the legs at a transition priority
-    -- that outranks locomotion, so input returned now would move the player
-    -- while the stand-up still plays -- sliding out of the chair. Released in
-    -- the one-shot's callback below instead, which playOneShot guarantees runs:
-    -- immediately when there is no exit clip, on the clip ending, or on its
-    -- 1s backstop if the clip never reports an end.
     unsubscribeRefresh()
     clearCameraOffset()
     self.object:sendEvent('FPV_SetEyeDropOverride', { offset = 0 })
@@ -1381,20 +1193,10 @@ local function stopSitting()
     end
     currentFurniture, originalChairPos, originalChairRot = nil, nil, nil
 
-    -- The move starts WITH the clip, not after it. The clip has no root
-    -- motion, so the two cannot fight, and a stand-up that finishes where it
-    -- started and then teleports is the jarring version of this.
     stopHoldingSeat()
     local moveTime = commitStandPoint(furnitureRef)
 
-    -- Collision comes back when the move has landed, and not before: with it
-    -- off, neither the seat nor the table can push the player mid-glide. If
-    -- the glide was skipped this is simply the next tick.
     async:newUnsavableSimulationTimer(moveTime + 0.05, function()
-        -- Sat down again inside the glide window: that sit has already taken
-        -- collision off, and this timer belongs to the stand-up before it.
-        -- Restoring here would hand collision back while seated and leave the
-        -- keeper nudging the player for the rest of the sit.
         if isSitting then return end
         setSeatCollision(true)
     end)
@@ -1421,20 +1223,6 @@ end))
 -- ---------------------------------------------------------------------------
 -- STAND UP ON MOVEMENT INPUT
 -- ---------------------------------------------------------------------------
--- While seated, the movement override swallows input. That is the reported
--- "feels bad or unresponsive": the player pushes forward and nothing happens.
--- The override stays -- releasing it lets a seated player slide out of the
--- chair before anything notices -- and the first movement press stands them up
--- instead, in the same frame.
---
--- registerActionHandler fires on value change, so this costs nothing per frame
--- and adds no timer.
---
--- The action names are NOT guessed. `input.actions` is the engine's own map of
--- registered actions, so only names that actually exist are bound, and what
--- was bound is printed once at load. A handler registered against a name this
--- build does not have would never fire and never say so -- the same silent
--- failure as an animation group a .kf does not declare.
 local STANDUP_ACTIONS = { 'MoveForward', 'MoveBackward', 'MoveLeft',
                           'MoveRight', 'Jump' }
 
@@ -1453,13 +1241,20 @@ local function bindStandUpActions()
     for _, key in ipairs(STANDUP_ACTIONS) do
         if input.actions[key] then
             input.registerActionHandler(key, async:callback(function(value)
-                -- sitAnimStarted gates out the sit-down clip: a key pressed
-                -- while sitting down should not cut the transition in half.
                 if isSitting and sitAnimStarted and actionPressed(value) then
                     stopSitting()
                 end
             end))
             bound[#bound + 1] = key
+        elseif input.triggers and input.triggers[key] then
+            -- OpenMW 0.52 has Jump as a TRIGGER, not a named action: this
+            -- loop used to report "this build has no Jump", and Jump did
+            -- nothing while seated. Measured in-engine with vanilla bindings.
+            input.registerTriggerHandler(key, async:callback(function()
+                if I.UI and I.UI.getMode() ~= nil then return end
+                if isSitting and sitAnimStarted then stopSitting() end
+            end))
+            bound[#bound + 1] = key .. ' (trigger)'
         else
             absent[#absent + 1] = key
         end
@@ -1529,20 +1324,21 @@ local function onSave()
         chair = { furniture = currentFurniture, position = originalChairPos,
                   rotation = originalChairRot }
     end
-    -- Saved so a load can put collision back. Without this, a save made while
-    -- seated could restore into a game where the player's collision is off
-    -- with nothing on screen to say why.
+    -- Where to stand the player on load. Without it a save made while seated
+    -- loaded with the player STANDING ON the seat: collision back on, nobody
+    -- moving them off (measured in OpenMW 0.52: on top of a barstool, z 429
+    -- over a 406 floor; one step forward was the bar counter). At a table
+    -- that overlap is the push onto the tabletop v0.41 exists to prevent.
+    -- The gate-validated exit if there is one, else where they stood to sit.
+    local exit = nil
+    if isSitting then exit = plannedExit or standingPos end
     return { controlsLocked = controlsLocked, chair = chair,
-             collisionDisabled = collisionDisabled or nil }
+             collisionDisabled = collisionDisabled or nil, exit = exit }
 end
 
 local function onLoad(data)
     isSitting, sitAnimStarted, resolveActive = false, false, false
     currentFurniture, originalChairPos, originalChairRot = nil, nil, nil
-    -- A load lands the player wherever the save put them, which is the seat if
-    -- they saved while seated. The recorded origin belongs to that session's
-    -- sit, not this one, so it is dropped rather than used to teleport someone
-    -- the moment their game finishes loading.
     standingPos, standingFloorZ, standingCell = nil, nil, nil
     plannedExit, seatedFacing = nil, nil
     resolveToken = resolveToken + 1
@@ -1550,15 +1346,22 @@ local function onLoad(data)
     unsubscribeRefresh()
     clearCameraOffset()
 
-    -- Collision first, before anything else can go wrong: if this save was
-    -- made while seated with collision off, the player gets it back now rather
-    -- than discovering it by walking through a wall. Claimed only if this mod
-    -- is the one that took it.
     if data and data.collisionDisabled then
         collisionDisabled = true
-        setSeatCollision(true)
+        if data.exit then
+            -- Off the seat first, collision back once the move has landed:
+            -- otherwise the seat (or the table) gets a frame to push the
+            -- player up. The placement is a global event, a frame later.
+            core.sendGlobalEvent('SitPlacePlayer', { position = data.exit })
+            async:newUnsavableSimulationTimer(0.15, function()
+                if not isSitting then setSeatCollision(true) end
+            end)
+        else
+            setSeatCollision(true)
+        end
     else
         collisionDisabled = false
+        if data and data.exit then core.sendGlobalEvent('SitPlacePlayer', { position = data.exit }) end
     end
     if data and data.controlsLocked then
         controlsLocked = true

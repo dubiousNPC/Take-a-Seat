@@ -124,8 +124,13 @@ check('a nil profile has no slots', seats.solverSlot(nil, 1) == nil)
 -- the placement maths, lifted from the module
 -- ---------------------------------------------------------------------------
 local src = io.open('scripts/take_a_seat/take_a_seat.lua'):read('a')
-local body = src:match('(local function clampScale.-\nend\n)\n---Facing choice')
-assert(body, 'could not extract the placement helpers')
+-- Ends where the facing-choice section begins. Anchored on CODE, not on a
+-- comment: the span used to end at a '---Facing choice' doc comment, the
+-- comment was dropped in an edit, and this test stopped extracting anything
+-- while every other job stayed green.
+local body = src:match('(local function clampScale.-\nend\n)\n+local FACING_SCAN_RANGE')
+assert(body, 'could not extract the placement helpers: the span runs from '
+    .. "'local function clampScale' to 'local FACING_SCAN_RANGE' in take_a_seat.lua")
 
 local V = {}
 V.__index = V

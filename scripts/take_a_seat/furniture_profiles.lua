@@ -6,17 +6,10 @@
     calibrates the same furniture this mod sits on and is kept far more
     current than a hand-maintained list. Regenerate with
     tools/gen_furniture_profiles.py.
-
-    The generator asserts every SeatType here is one Take a Seat defines,
-    so a profile naming an unknown type stops the build instead of
-    classifying furniture as nil at runtime -- which is how the THRONE
-    and BATH faults both reached players.
 ]]
 
 local M = {}
 
--- recordId -> seat type string. Merged UNDER the mod's own table, so a
--- hand-authored entry always wins over a generated one.
 M.SEATS = {
     ['ab_furn_commidchaircushgreen'] = 'backed_chair',
     ['ab_furn_demidbench'] = 'bench',

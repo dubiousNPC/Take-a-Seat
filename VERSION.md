@@ -1,3 +1,86 @@
+# Take a Seat v0.42
+
+Tested in OpenMW 0.52 on real Morrowind, Tribunal and Bloodmoon data, with
+real key presses under vanilla bindings (Activate is Space, Jump is E, the
+view toggle is Tab). 20 distinct vanilla seat records, from Seyda Neen and
+Balmora interiors where the game places them, cover every seat type:
+- backed chairs (fixed solver);
+- benches (two-sided);
+- stools and barstools (free);
+- cushions (the raycast path).
+
+18 seats ran the full cycle with 162/162 checks passing on the final code,
+and no Lua errors. Each checks:
+- it sits;
+- the enter clip hands over to the seated idle;
+- the player lands on the seat;
+- drift is 0 over 2 s;
+- the view toggles both ways;
+- it stands up into a sane, unembedded spot;
+- collision is back on.
+
+The other two are out of reach, not failures: one record is a disabled quest
+prop, and one chair is boxed in by its storage room.
+
+## Fixed: a player seated in third person could not get back to first person
+The seated idle played the legs at **Weapon** priority. The engine refuses to
+switch the camera to first person while any animation state holds Hit,
+Weapon, Knockdown or Death (`MWRender::Animation::upperBodyReady`), and queues
+the switch instead. So for the whole sit, Tab from third person did nothing
+until the player stood up. Measured on a chair, a bench and a cushion.
+
+The idle's legs are now **Block**:
+- still above every engine leg state (Movement, Jump, Hit, Weapon);
+- still under the transitions' Knockdown;
+- a non-uniform tuple, so a shield's Block cannot erase it.
+
+`test_priorities` pins the engine rule for the seat and misc idles.
+
+## Fixed: Jump never stood the player up
+Jump was in the stand-up list, but OpenMW 0.52 has Jump as a **trigger**, not
+a named action. The binder only looked at actions and printed "this build has
+no Jump". It now falls back to the trigger: "Jump (trigger)".
+
+## Fixed: a save made while seated loaded with the player standing on the seat
+Collision came back on load, but nothing moved the player off the furniture.
+On a barstool they stood on top of it; at a table that is the push onto the
+tabletop that v0.41 exists to prevent.
+
+The save now carries the gate-validated exit, or the spot the player stood on
+to sit. On load the player is placed there first, and collision comes back
+0.15 s later. Verified with a real F5/F9: the player loads on the floor beside
+the seat, with collision on and free to move.
+
+## Parkourwind FLOW is yielded while seated
+A seated player is placed with collision off and is never grounded, so FLOW
+sat in Airborne for the whole sit. With Jump now standing the player up, that
+same held jump would reach FLOW during the glide beside a table. The sit now
+calls `I.Flow.yield` **before** taking the shared movement override, and
+resumes after releasing it. Optional: without FLOW, nothing happens.
+
+In-engine with FLOW loaded, on a bench and two chairs at tables (39/39):
+- FLOW is Idle and yielded while seated;
+- E stands the player up;
+- no FLOW move fires;
+- FLOW is handed back afterwards.
+
+## Requirement now stated
+**"Use additional animation sources"** must be on, and it is off by default.
+Without it the player sits in the standing idle. The README says so, and the
+mod prints a one-time hint naming the setting.
+
+## Tests
+- `test_solver_profiles` extracted its helpers up to a `---Facing choice`
+  comment that an edit had removed, so it stopped testing anything while
+  every other job stayed green. It is now anchored on code
+  (`local FACING_SCAN_RANGE`).
+- `test_controls` gains the FLOW yield order and the Jump trigger. Against
+  the v0.41 file, 6 of its checks fail.
+- `test_priorities` gains the camera rule. With the idle back at Weapon, 2
+  checks fail.
+- All 8 suites pass on Lua 5.4 and on LuaJIT; `run_check_all` runs 14 jobs
+  with 0 failures.
+
 # Take a Seat v0.41
 
 Both things reported from in-game testing of v0.40: the drift back onto the
