@@ -32,7 +32,7 @@ local SEAT_ANIM_BY_NAME = {
     BARSTOOL          = "dbssit6",
     SINGLE_SEAT_BENCH = "dbssit4",
     CUSHION           = "rasit6",
-    THRONE            = "dbssit8",
+    THRONE            = "dbssitThrone4",
     BATH              = "dbssit2",
 }
 
