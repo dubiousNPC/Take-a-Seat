@@ -25,10 +25,6 @@ return function(c)
         c.wait(2.0)
         c.log('AFTERLOAD seated=%s off=[%s] collision=%s',
               tostring(c.seated ~= nil), offSwitches(), tostring(debug.isCollisionEnabled()))
-        -- onLoad (take_a_seat.lua:1009-1025) deliberately force-releases the
-        -- lock recorded at save time, so a seated save can never load
-        -- soft-locked. Sit state itself is a documented non-persisted
-        -- limitation: you come back standing.
         c.result('a seated save loads standing, not seated', c.seated == nil,
                  'seated='..tostring(c.seated ~= nil))
         c.result('a seated save loads with the control lock released',

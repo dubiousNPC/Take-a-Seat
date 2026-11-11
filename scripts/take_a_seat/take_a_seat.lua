@@ -1324,12 +1324,6 @@ local function onSave()
         chair = { furniture = currentFurniture, position = originalChairPos,
                   rotation = originalChairRot }
     end
-    -- Where to stand the player on load. Without it a save made while seated
-    -- loaded with the player STANDING ON the seat: collision back on, nobody
-    -- moving them off (measured in OpenMW 0.52: on top of a barstool, z 429
-    -- over a 406 floor; one step forward was the bar counter). At a table
-    -- that overlap is the push onto the tabletop v0.41 exists to prevent.
-    -- The gate-validated exit if there is one, else where they stood to sit.
     local exit = nil
     if isSitting then exit = plannedExit or standingPos end
     return { controlsLocked = controlsLocked, chair = chair,
@@ -1349,9 +1343,6 @@ local function onLoad(data)
     if data and data.collisionDisabled then
         collisionDisabled = true
         if data.exit then
-            -- Off the seat first, collision back once the move has landed:
-            -- otherwise the seat (or the table) gets a frame to push the
-            -- player up. The placement is a global event, a frame later.
             core.sendGlobalEvent('SitPlacePlayer', { position = data.exit })
             async:newUnsavableSimulationTimer(0.15, function()
                 if not isSitting then setSeatCollision(true) end
