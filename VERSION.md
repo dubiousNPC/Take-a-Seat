@@ -15,6 +15,7 @@ Beds, as tested in OpenMW 0.52 RC1 on real data (see `docs/tickets/`).
 - **Rest menu** (0006): the bed's vanilla activation is held back for the press that lies down. New setting "Activate on a bed lies down" (default on): Sneak + Activate opens the Rest menu.
 - **Tools and tests** (0007, 0008): `check_bed_surfaces.py` finds `es3` through `TAS_ES3_LIB`; `test_solver_profiles.lua` fixtures are deterministic under Lua 5.4. New checks for berth choice, the clip-length backstop and the activation guard.
 - **README** (0009): beds, the interface and the events are documented.
+- **Bed movement over the transition** (2026-11-14): lying down no longer teleports onto the mattress. The body glides from where you stand to the slot over 1 s (`BED_GLIDE_TIME`, smoothstep) as the lie-down clip starts. Getting up glides off over the last 1 s of `getup1`, landing as it ends (was a 0.35 s glide after it). The seat keeper waits for the glide to land.
 
 # Take a Seat v0.43
 

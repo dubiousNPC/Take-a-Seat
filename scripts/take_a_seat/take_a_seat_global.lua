@@ -46,8 +46,18 @@ local function onSitTeleport(eventData)
     local yaw = eventData.yaw
 
     local rotation = eventData.yawAbsolute and yaw or (yaw + math.pi)
-    player:teleport(player.cell, pos,
-        { rotation = util.transform.rotateZ(rotation) })
+    local from = eventData.glideFrom
+    if from and eventData.glideTime and eventData.glideTime > 0 then
+        -- Turned to the lying facing where the player stands, then carried to
+        -- the slot over the transition clip (beds).
+        player:teleport(player.cell, from,
+            { rotation = util.transform.rotateZ(rotation) })
+        move = { from = from, to = pos, elapsed = 0,
+                 duration = eventData.glideTime, ease = 'inout' }
+    else
+        player:teleport(player.cell, pos,
+            { rotation = util.transform.rotateZ(rotation) })
+    end
 
     player:sendEvent('SitAnimStart', {})
 end
@@ -69,7 +79,7 @@ local function onSitPlacePlayer(eventData)
         return
     end
     move = { from = eventData.from, to = to, elapsed = 0,
-             duration = eventData.duration }
+             duration = eventData.duration, ease = eventData.ease }
 end
 
 local function onUpdate(dt)
@@ -82,7 +92,9 @@ local function onUpdate(dt)
         player:teleport(player.cell, to)
         return
     end
-    local eased = 1 - (1 - t) * (1 - t)
+    -- 'inout' (beds, 1 s): smoothstep, no jolt at either end of a long move;
+    -- default: ease-out, quick to leave a seat and settling at the point.
+    local eased = move.ease == 'inout' and t * t * (3 - 2 * t) or 1 - (1 - t) * (1 - t)
     player:teleport(player.cell, move.from + (move.to - move.from) * eased)
 end
 

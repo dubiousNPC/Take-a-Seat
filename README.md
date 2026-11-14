@@ -87,7 +87,7 @@ A save made while seated loads standing; `TakeASeat_Stood` and `TakeASeat_StandC
 - **Beds** use the same authored contract as seats (`worldRoot = objectPosition + objectRotation * (slot.root * scale)`), from the solver pack's 289 bed profiles, keyed by model. Two corrections are applied on top, both measured in game (`docs/tickets/`):
   - **Facing.** The pack's bed yaws face its reference pose; `sleept*` lies the other way, so `BED_POSE_YAW` adds 180° for single, double, bunk and bedroll; hammocks play `sleept6`, which lies across the pack yaw, so they get 90°.
   - **Type.** When a model has a pack profile its `bedType` wins over the SDP record list (which calls every vanilla bunk "single"); the three vanilla hammock meshes, labelled "single" in the pack, are corrected by model in `BED_TYPE_BY_MODEL`.
-- **Getting off a bed** plays `getup1` in place and steps off after it; a seat glides *with* its stand-up clip.
+- **Bed transitions carry the body over 1 s** (`BED_GLIDE_TIME`), eased in and out. Lying down glides from where you stand onto the slot as the lie-down clip starts. Getting up plays `getup1` in place and glides off in its last second, so the step lands as the clip ends. Controls and collision come back when both are done. A seat glides *with* its stand-up clip (0.35 s).
 - **A bed slot is chosen by where you look** (the aim point on the bed); a seat slot by where you stand.
 - **The bed's vanilla activation** (the Rest menu from `Bed_Standard`) is held back by a global `I.Activation` handler for the press that lies down, so the two never open together.
 - Sitting restores fatigue up to its fortified maximum and never lowers it.

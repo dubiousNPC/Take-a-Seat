@@ -253,19 +253,28 @@ local seatStand = bedFrom
 
 check('beds leave by their own branch', bedBranch ~= nil)
 if bedBranch then
-    local bClip = bedBranch:find("playOneShot%(exitGroup, 'exit'")
-    local bMove = bedBranch:find('commitStandPoint%(furnitureRef%)')
-    check('a bed plays the stand-up clip before it steps off the mattress',
-          bClip ~= nil and bMove ~= nil and bClip < bMove,
-          tostring(bClip) .. ' vs ' .. tostring(bMove))
+    -- 2026-11-14: the step off is spread over BED_GLIDE_TIME (1 s) in the
+    -- LAST part of getup1, so the movement lands as the clip ends, rather than
+    -- a 0.35 s glide after it. Scheduled from the clip's own length.
+    check('the step off is scheduled BED_GLIDE_TIME before the clip ends',
+          bedBranch:find('newUnsavableSimulationTimer%(math%.max%(0, len %- BED_GLIDE_TIME%)') ~= nil)
+    check('and it glides for BED_GLIDE_TIME, eased in and out',
+          bedBranch:find("commitStandPoint%(furnitureRef, BED_GLIDE_TIME, 'inout'%)") ~= nil)
+    check('a clip whose length cannot be read steps off after it instead',
+          bedBranch:find('if not stepped then stepOff%(%) end') ~= nil)
     check('the bed branch returns rather than falling into the seat path',
           bedBranch:find('\n        return\n') ~= nil)
     check('the bed branch clears the kind so the next sit reclassifies',
           bedBranch:find('currentKind, currentSubType = nil, nil') ~= nil)
     check('the bed branch restores collision exactly once',
           select(2, bedBranch:gsub('setSeatCollision%(true%)', '')) == 1)
-    check('and releases controls once the clip has ended',
-          bedBranch:find('releaseControls%(%)') ~= nil)
+    check('and releases controls only when the clip AND the glide are done',
+          bedBranch:find('left = left %- 1') ~= nil and bedBranch:find('releaseControls%(%)') ~= nil)
+    check('BED_GLIDE_TIME is 1 s', src:find('local BED_GLIDE_TIME%s*=%s*1%.0') ~= nil)
+    check('lying down glides from where the player stands over BED_GLIDE_TIME',
+          src:match("local function commitSit.-glideFrom%s*=%s*bedGlide and self%.position") ~= nil)
+    check('the seat keeper waits for that glide to land',
+          src:match("local function commitSit.-newUnsavableSimulationTimer%(bedGlide %+ 0%.05.-startHoldingSeat%(sitPos%)") ~= nil)
 end
 
 local moveAt = seatStand:find('commitStandPoint%(furnitureRef%)')

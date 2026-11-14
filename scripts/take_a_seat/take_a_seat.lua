@@ -162,6 +162,11 @@ local BED_MODE_RATE       = 0.05   -- seconds; how often the bed Activate/Sneak 
 local SEAT_KEEP_TOLERANCE = 6      -- units of drift tolerated before a re-assert
 
 local EXIT_GLIDE_TIME  = 0.35      -- seconds
+-- Beds: the body is carried between the floor and the slot over this long,
+-- inside the transition clip rather than in a snap before or after it. Onto
+-- the bed it starts with the lie-down clip; off it, it runs in the last
+-- BED_GLIDE_TIME of getup1 so the step lands as the clip ends.
+local BED_GLIDE_TIME   = 1.0       -- seconds
 local EXIT_GLIDE_PROBE_Z = 40      -- torso height for the path check
 
 local FLAT_RAYS    = { { z = 10 }, { z = 30 }, { z = 55 } }
@@ -1068,6 +1073,7 @@ local function commitSit(furniture, chairPos, sitPos, yaw, yawAbsolute)
     originalChairPos = chairPos and furniture.position or nil
     originalChairRot = chairPos and furniture.rotation or nil
     currentKind, currentSubType, currentSitAnim = resolveSeatPose(furniture)
+    local bedGlide = currentKind == seats.TARGET_KIND.BED and BED_GLIDE_TIME or nil
 
     core.sendGlobalEvent('SitTeleport', {
         position     = sitPos,
@@ -1075,6 +1081,9 @@ local function commitSit(furniture, chairPos, sitPos, yaw, yawAbsolute)
         yawAbsolute  = yawAbsolute and true or nil,
         furniture    = furniture,
         furniturePos = chairPos,
+        -- a bed is lain on from where the player stands, over the clip
+        glideFrom    = bedGlide and self.position or nil,
+        glideTime    = bedGlide,
     })
 
     -- Public hook (README: For other mods). seatType stays as before for
@@ -1095,7 +1104,18 @@ local function commitSit(furniture, chairPos, sitPos, yaw, yawAbsolute)
     resolveActive  = false
     standingUp, standPending = false, 0
     setSeatCollision(false)
-    startHoldingSeat(sitPos)
+    if bedGlide then
+        -- The keeper would snap a gliding body to the slot: hold it only once
+        -- the glide has landed.
+        local token = resolveToken
+        async:newUnsavableSimulationTimer(bedGlide + 0.05, function()
+            if isSitting and currentFurniture == furniture and token == resolveToken then
+                startHoldingSeat(sitPos)
+            end
+        end)
+    else
+        startHoldingSeat(sitPos)
+    end
     lockControls()
     subscribeRefresh()
     applyCameraOffset()
@@ -1254,8 +1274,22 @@ local function usableOrigin()
     return standingPos
 end
 
+---Length of a group on this skeleton from its start/stop text keys, or nil.
+local function clipLength(group)
+    if not (group and anim.getTextKeyTime) then return nil end
+    local okA, t0 = pcall(anim.getTextKeyTime, self, group .. ': start')
+    local okB, t1 = pcall(anim.getTextKeyTime, self, group .. ': stop')
+    if okA and okB and type(t0) == 'number' and type(t1) == 'number' and t1 > t0 then
+        return t1 - t0
+    end
+    return nil
+end
+
+---@param duration number|nil glide length (default EXIT_GLIDE_TIME)
+---@param ease string|nil 'out' (default) or 'inout'
 ---@return number seconds the move will take
-local function commitStandPoint(furniture)
+local function commitStandPoint(furniture, duration, ease)
+    duration = duration or EXIT_GLIDE_TIME
     local from = self.position
     local origin = usableOrigin()
     local target, what = safety.chooseStandPoint(
@@ -1290,9 +1324,10 @@ local function commitStandPoint(furniture)
     core.sendGlobalEvent('SitPlacePlayer', {
         position = target,
         from     = glide and from or nil,
-        duration = glide and EXIT_GLIDE_TIME or nil,
+        duration = glide and duration or nil,
+        ease     = glide and ease or nil,
     })
-    return glide and EXIT_GLIDE_TIME or 0
+    return glide and duration or 0
 end
 
 -- TakeASeat_StandComplete goes out once BOTH halves of getting up are done:
@@ -1348,15 +1383,34 @@ local function stopSitting(reason)
     -- from lying with no root motion (static Bip01, 0.3 units of pelvis
     -- travel), so gliding during it would play the rise beside the bed. Seats
     -- glide WITH their stand-up clip, which is what that clip is made for.
+    -- The step off runs over BED_GLIDE_TIME in the last part of the clip, so
+    -- the movement is spread over the transition and lands as it ends;
+    -- controls and collision come back when both the clip and the glide are
+    -- done. A clip whose keys cannot be read steps off after it instead.
     if currentKind == seats.TARGET_KIND.BED and exitGroup then
-        playOneShot(exitGroup, 'exit', function()
-            local mt = commitStandPoint(furnitureRef)
-            async:newUnsavableSimulationTimer(mt + 0.05, function()
-                if isSitting then return end
-                setSeatCollision(true)
-                releaseControls()
-                standPartDone(); standPartDone()
+        local left = 2
+        local function bedPart()
+            left = left - 1
+            if left > 0 or isSitting then return end
+            setSeatCollision(true)
+            releaseControls()
+            standPartDone(); standPartDone()
+        end
+        local function stepOff()
+            local mt = commitStandPoint(furnitureRef, BED_GLIDE_TIME, 'inout')
+            async:newUnsavableSimulationTimer(mt + 0.05, bedPart)
+        end
+        local len = clipLength(exitGroup)
+        local stepped = false
+        if len then
+            stepped = true
+            async:newUnsavableSimulationTimer(math.max(0, len - BED_GLIDE_TIME), function()
+                if not isSitting then stepOff() end
             end)
+        end
+        playOneShot(exitGroup, 'exit', function()
+            if not stepped then stepOff() end
+            bedPart()
         end)
         currentKind, currentSubType = nil, nil
         return

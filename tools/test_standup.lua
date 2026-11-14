@@ -134,6 +134,32 @@ check('a real furniture move is applied', #chairTeleports == 1)
 -- ---------------------------------------------------------------------------
 -- the stand-up move
 -- ---------------------------------------------------------------------------
+-- A bed: lain on from where the player stands over the transition (1 s),
+-- turned to the lying facing at the start, eased in and out.
+teleports = {}
+H.SitTeleport({ position = vec(100, 0, 40), yaw = 0.5, yawAbsolute = true,
+                glideFrom = vec(0, 0, 0), glideTime = 1.0 })
+check('bed: the first teleport is to where the player stands, already facing the bed',
+      #teleports == 1 and teleports[1].pos.x == 0 and math.abs(teleports[1].options.rotation.yaw - 0.5) < 1e-9)
+local mid
+for _ = 1, 5 do M.engineHandlers.onUpdate(0.1) end
+mid = player.position
+check('bed: half way through, half way there (smoothstep is symmetric)', math.abs(mid.x - 50) < 1e-6, mid.x)
+for _ = 1, 6 do M.engineHandlers.onUpdate(0.1) end
+check('bed: after 1 s it lands exactly on the slot', player.position.x == 100 and player.position.z == 40, player.position.x)
+teleports = {}
+M.engineHandlers.onUpdate(0.1)
+check('bed: and the move is over', #teleports == 0)
+-- the step off: same easing on request
+teleports = {}
+H.SitPlacePlayer({ position = vec(0, 0, 0), from = vec(100, 0, 0), duration = 1.0, ease = 'inout' })
+M.engineHandlers.onUpdate(0.25)
+check('bed step off: eased in (a quarter of the time covers well under a quarter of the way)',
+      player.position.x > 100 - 25 and player.position.x < 100, player.position.x)
+for _ = 1, 4 do M.engineHandlers.onUpdate(0.25) end
+check('bed step off: lands on the stand point', player.position.x == 0, player.position.x)
+
+-- ---------------------------------------------------------------------------
 -- No `from`/`duration`: one teleport, which is what the seat keeper and a
 -- blocked exit path both use.
 teleports = {}
