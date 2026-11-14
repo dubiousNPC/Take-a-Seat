@@ -3,6 +3,8 @@
 local world = require('openmw.world')
 local types = require('openmw.types')
 local util  = require('openmw.util')
+local I     = require('openmw.interfaces')
+local seats = require('scripts.take_a_seat.sitAnim_shared')
 
 local player = nil
 
@@ -84,6 +86,31 @@ local function onUpdate(dt)
     player:teleport(player.cell, move.from + (move.to - move.from) * eased)
 end
 
+-- The bed's own activation (vanilla Bed_Standard opens the Rest menu) is held
+-- back for the press that lies down, so the two do not open together
+-- (docs/tickets/0006). The player script reports which press that is: plain
+-- Activate by default, Sneak + Activate with the setting off. Until the first
+-- report arrives (the first frame after a load) plain Activate lies down.
+local bedPressLies = true
+
+local function onBedActivateMode(data)
+    if data and data.lie ~= nil then bedPressLies = data.lie and true or false end
+end
+
+local function modelOf(obj)
+    local rec = types.Activator.record(obj)
+    return rec and rec.model or nil
+end
+
+if I.Activation and I.Activation.addHandlerForType then
+    I.Activation.addHandlerForType(types.Activator, function(obj, actor)
+        if not bedPressLies then return end
+        if not (actor and actor.type == types.Player) then return end
+        local ok, bed = pcall(seats.isBed, obj.recordId, modelOf(obj))
+        if ok and bed then return false end
+    end)
+end
+
 local function onSitRestoreChair(eventData)
     local furniture = eventData.furniture
     local pos       = eventData.position
@@ -106,5 +133,6 @@ return {
         SitTeleport       = onSitTeleport,
         SitPlacePlayer    = onSitPlacePlayer,
         SitRestoreChair   = onSitRestoreChair,
+        TakeASeat_BedActivateMode = onBedActivateMode,
     }
 }

@@ -15,13 +15,18 @@ local code = src:gsub('%-%-%[%[.-%]%]', ''):gsub('%-%-[^\n]*', '')
 check('openmw.animation is not asked for an ended handler',
     not code:find('anim%.addAnimationEndedHandler'))
 
-local ended, timers, played = nil, {}, {}
+local ended, timers, played, delays = nil, {}, {}, {}
 local env = setmetatable({
     profileFor = function() return { loops = 0, priority = 1, blendMask = 15 } end,
-    anim = { playBlended = function(_, g) played[#played + 1] = g end },
+    anim = { playBlended = function(_, g) played[#played + 1] = g end,
+             getTextKeyTime = function(_, key)
+                 local KEYS = { ['sleepte1: start'] = 0.0, ['sleepte1: stop'] = 1.967,
+                                ['getup1: start'] = 0.0, ['getup1: stop'] = 2.0 }
+                 return KEYS[key]
+             end },
     self = {},
-    async = { newUnsavableSimulationTimer = function(_, d, f) timers[#timers + 1] = f end },
-    ONE_SHOT_TIMEOUT = 1.0,
+    async = { newUnsavableSimulationTimer = function(_, d, f) timers[#timers + 1] = f; delays[#delays + 1] = d end },
+    ONE_SHOT_TIMEOUT = 1.0, ONE_SHOT_MARGIN = 0.25,
     I = { AnimationController = { addAnimationEndedHandler = function(h) ended = h end } },
     core = { getSimulationTime = function() return 0 end },
     isSitting = false, sitAnimStarted = false, currentSitAnim = nil,
@@ -53,6 +58,17 @@ for _, t in ipairs(timers) do t() end
 check('a clip that never ends is finished by the timeout', done == 1)
 ended('never_ends')
 check('a late ended event after the timeout does not re-run done', done == 1, done)
+
+-- The backstop follows the clip's own text keys when they can be read.
+delays = {}
+play('sleepte1', 'enter', function() end)
+check('backstop = sleepte1 length (1.967) + margin', math.abs((delays[1] or 0) - 2.217) < 1e-6, delays[1])
+delays = {}
+play('getup1', 'exit', function() end)
+check('backstop = getup1 length (2.0) + margin', math.abs((delays[1] or 0) - 2.25) < 1e-6, delays[1])
+delays = {}
+play('no_keys_clip', 'exit', function() end)
+check('no readable keys: the fixed fallback is used', delays[1] == 1.0, delays[1])
 
 -- The timeout is a backstop, not a timer the clips are expected to hit. The
 -- shipped transitions are ~1.03s (measured from xdbsTASsitT.kf text keys), so a

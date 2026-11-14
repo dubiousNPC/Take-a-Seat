@@ -1,3 +1,72 @@
+# Take a Seat v0.44
+
+Beds, as tested in OpenMW 0.52 RC1 on real data (see `docs/tickets/`).
+
+- **Facing** (0001): `BED_POSE_YAW` per bed type. The pack's bed yaws face its `slee8` reference, and `sleept*` lies the other way, which put the feet on the pillow on every bed. The fix adds 180 for single, double, bunk and bedroll, and 90 for hammocks (`sleept6` lies across the pack yaw).
+- **Upper berth** (0002): a bed slot is chosen by the aim point on the bed, not the feet, so `sleep_top` is reachable. Seats still choose from the feet.
+- **Bed type** (0003): the pack's `bedType` wins over the SDP record list, which called every vanilla bunk single. `active_de_bed_28/29/30` are corrected to hammock by model.
+- **Clip timing** (0004): the one-shot backstop is the clip's own length (`getTextKeyTime` start/stop) + 0.25 s, so `sleepte*` and `getup1` play in full, and the step off a bed waits for `getup1` to end.
+- **For other mods** (0005):
+  - `I.TakeASeat` v1: `isSeated`, `isBusy`, `getState`, `standUp`.
+  - `TakeASeat_Seated` gains `kind`, `subType`, `slot`, and a lowercase `animGroup`.
+  - `TakeASeat_Stood` carries `furniture`, `kind`, `subType`, `slot` and `reason`.
+  - New `TakeASeat_StandComplete`.
+  - Both events are sent with `reason = 'load'` when loading a save made seated.
+- **Rest menu** (0006): the bed's vanilla activation is held back for the press that lies down. New setting "Activate on a bed lies down" (default on): Sneak + Activate opens the Rest menu.
+- **Tools and tests** (0007, 0008): `check_bed_surfaces.py` finds `es3` through `TAS_ES3_LIB`; `test_solver_profiles.lua` fixtures are deterministic under Lua 5.4. New checks for berth choice, the clip-length backstop and the activation guard.
+- **README** (0009): beds, the interface and the events are documented.
+
+# Take a Seat v0.43
+
+Beds move onto the authored placement path. The bed prototype placed the
+sleeper at the furniture's bounding-box centre, which is the middle of the
+mattress: a double or a bunk had both of its authored slots collapse onto one
+point. Beds now use the same contract as seats --
+
+    worldRoot = objectPosition + objectRotation * (slot.root * scale)
+    worldYaw  = objectYaw + rad(slot.yaw)
+
+-- reading the 289 bed profiles (430 named slots) the solver pack has carried
+all along. `gen_solver_profiles.py --sleep` emits them; see docs/positioning.md
+for the full contract and the measurements behind it.
+
+What changed:
+- `solver_profiles.lua` now holds 478 profiles / 660 slots (was 189 / 230).
+  Bed profiles carry `bedType` and named slots: `sleep_main`,
+  `sleep_left`/`sleep_right`, `sleep_bottom`/`sleep_top`.
+- Beds are recognised by **model** as well as record id, so the reach goes
+  from the 39 beds the SDP harvest named to all 289 the pack covers --
+  including beds from mods this one has never heard of that reuse a known
+  mesh. `isSittable` takes the object rather than a bare record id for the
+  same reason; without that a pack bed was placed correctly and then never
+  offered as a target.
+- `POSE_DELTA` stays empty for beds, measured not assumed: every `sleept*` and
+  `sleepte*` group carries the same `Bip01` (6.264, 0.782, 2.328) and
+  `Bip01 Pelvis` (2.904, 0, 0) as the seated reference `dbssit5`. The `slee8`
+  row in `sdp/animationNormalizationOffsets.txt` must not be applied.
+- The bed ENTER transitions `sleepte1..6` ship only in the three third-person
+  animation folders; the `.1st` copies have `sleept1..6` only. They now fall
+  back to the matching held pose, so first person no longer skips the lie-down
+  silently.
+- The bounding-box path survives as the no-profile fallback only, and a bed can
+  no longer fall through to `resolveChairPosition` (seat pivot offsets and a
+  seat-height raycast mean nothing on a mattress).
+- `gen_solver_profiles.py` now asserts bed types against the clips the mod maps
+  and that every bed is fixed-facing, so a pack change stops the build instead
+  of playing no clip at runtime.
+
+Checks: 15 jobs green, including `test_beds_sweep.lua` (all 289 profiles and
+430 slots at all four 90-degree object yaws, 2284 assertions) and
+`check_bed_surfaces.py`, which validates the authored roots against the real
+game meshes out of the BSAs -- on the 41 vanilla beds every root is inside the
+mesh footprint, median +1.44 units above the visible surface beneath it.
+
+Not re-run in the engine: the real-data harness needs a prebuilt OpenMW
+0.52-rc1 binary, and only the source tree was available this session. The v0.42
+seat results below still stand.
+
+---
+
 # Take a Seat v0.42
 
 Tested in OpenMW 0.52 on real Morrowind, Tribunal and Bloodmoon data, with

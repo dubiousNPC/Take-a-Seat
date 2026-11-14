@@ -57,7 +57,15 @@ local chair = {
 
 package.preload['openmw.world'] = function() return {
     activeActors = { player } } end
-package.preload['openmw.types'] = function() return { Player = 'player' } end
+local activationHandlers = {}
+local ACTIVATOR = { name = 'Activator' }
+local MODELS = { active_de_p_bed_04 = 'meshes/f/active_de_bed_04.nif',
+                 furn_com_rm_barstool = 'meshes/f/furn_com_rm_barstool.nif' }
+ACTIVATOR.record = function(obj) return { model = MODELS[obj.recordId] } end
+package.preload['openmw.types'] = function() return { Player = 'player', Activator = ACTIVATOR } end
+package.preload['openmw.interfaces'] = function() return { Activation = {
+    addHandlerForType = function(t, h) activationHandlers[#activationHandlers + 1] = { t = t, h = h } end } } end
+package.preload['openmw.core'] = function() return { contentFiles = { list = { 'Morrowind.esm' }, has = function() return false end } } end
 package.preload['openmw.util'] = function() return {
     vector3 = vec,
     transform = { rotateZ = function(a) return { yaw = a } end },
@@ -67,6 +75,25 @@ package.path = './?.lua;' .. package.path
 local M = dofile('scripts/take_a_seat/take_a_seat_global.lua')
 check('the global script returns engine handlers',
       type(M.engineHandlers) == 'table')
+
+-- The bed's own activation is held back for the press that lies down
+-- (docs/tickets/0006), and only that one.
+local guard = activationHandlers[1]
+check('one activation handler is registered, for activators',
+      #activationHandlers == 1 and guard.t == ACTIVATOR)
+if guard then
+    local bed   = { recordId = 'active_de_p_bed_04' }
+    local stool = { recordId = 'furn_com_rm_barstool' }
+    local pl    = { type = 'player' }
+    check('a bed press by the player that lies down blocks the vanilla activation',
+          guard.h(bed, pl) == false)
+    check('a non-bed activator is left alone', guard.h(stool, pl) == nil)
+    check('an NPC activating a bed is left alone', guard.h(bed, { type = 'npc' }) == nil)
+    M.eventHandlers.TakeASeat_BedActivateMode({ lie = false })
+    check('with the Rest press (lie = false) the bed opens as vanilla', guard.h(bed, pl) == nil)
+    M.eventHandlers.TakeASeat_BedActivateMode({ lie = true })
+    check('and the lie-down press blocks it again', guard.h(bed, pl) == false)
+end
 check('and event handlers', type(M.eventHandlers) == 'table')
 check('onUpdate is registered', type(M.engineHandlers.onUpdate) == 'function')
 

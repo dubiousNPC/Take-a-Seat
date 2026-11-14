@@ -8,8 +8,8 @@ nothing in this file may be mixed with the legacy TSV offsets
 (FinalZOffset / FinalForwardOffset / HeightOffset) -- those have different
 semantics and the pack says so in terms.
 
-Only `sit` profiles are emitted. The 289 sleep profiles stay in the pack for
-when beds are wired; pass --sleep to emit those too.
+Both halves can be emitted. `--sleep` adds the 289 bed profiles, which the
+bed path has used since v0.43; without it only the 189 sitting ones are written.
 
 Everything the pack states about itself is asserted here rather than trusted at
 runtime: contract version, profile counts, and that each slot carries the
@@ -35,6 +35,12 @@ KNOWN_SEAT_TYPES = {
     'single_seat_bench', 'cushion', 'throne', 'bath',
 }
 KNOWN_POLICIES = {'fixed', 'two_sided', 'free'}
+
+# Bed types sitAnim_shared's BED_TYPE defines, each mapped to a sleep clip in
+# BED_ANIM. A pack bedType outside this set reaches idleAnimFor as nil and
+# plays no clip at all, which is the same silent-nil failure the seat-type
+# assert above exists to stop.
+KNOWN_BED_TYPES = {'single', 'double', 'bunk', 'bedroll', 'hammock'}
 
 
 def num(v):
@@ -80,6 +86,7 @@ def main(argv):
     # Validate before emitting: a missing root or yaw would place an actor at
     # the furniture origin with no indication why.
     unknown_types, unknown_policies, slot_count = set(), set(), 0
+    unknown_beds, unfixed_beds = set(), []
     for p in wanted:
         st = (p.get('seatType') or '').lower()
         if p['interactionType'] == 'sit':
@@ -88,6 +95,16 @@ def main(argv):
             pol = (p.get('facingPolicy') or '').lower()
             if pol not in KNOWN_POLICIES:
                 unknown_policies.add(pol)
+        else:
+            bt = (p.get('bedType') or '').lower()
+            if bt not in KNOWN_BED_TYPES:
+                unknown_beds.add(bt)
+            # Every bed in the pack is fixed-facing. A two_sided or free bed
+            # would need anchor/poseDelta on its slots to re-derive a root for
+            # a chosen facing, and the bed path never calls the facing chooser,
+            # so one appearing here is a contract change, not a data detail.
+            if (p.get('facingPolicy') or '').lower() != 'fixed':
+                unfixed_beds.append('%s=%s' % (p.get('model'), p.get('facingPolicy')))
         for s in p['slots']:
             slot_count += 1
             assert 'root' in s and 'yaw' in s, (
@@ -106,8 +123,16 @@ def main(argv):
     assert not unknown_policies, (
         'pack names facing policies this generator does not handle: %s'
         % ', '.join(sorted(unknown_policies)))
+    assert not unknown_beds, (
+        'pack names bed types Take a Seat does not map to a clip: %s'
+        % ', '.join(sorted(unknown_beds)))
+    assert not unfixed_beds, (
+        'pack has beds that are not fixed-facing, which the bed path cannot '
+        'place: %s' % ', '.join(unfixed_beds[:5]))
 
     ref_anims = sorted({p.get('referenceAnimation') for p in wanted if p['interactionType'] == 'sit'})
+    sleep_refs = sorted({p.get('referenceAnimation') for p in wanted
+                         if p['interactionType'] == 'sleep'})
 
     w = []
     w.append('---@omw-context none')
@@ -137,6 +162,29 @@ def main(argv):
     w.append('    `anchor`/`poseDelta` are present on slots whose facing is not fixed')
     w.append('    (two_sided, free). anchor is the seat point with the pose offset')
     w.append('    removed, so a root for a chosen facing is rebuilt from it.')
+    if sleep_refs:
+        w.append('')
+        w.append('    BEDS (kind = \'sleep\') use the SAME contract, with `bedType`')
+        w.append('    in place of `seatType` and named slots: sleep_main, or')
+        w.append('    sleep_left/sleep_right for a double and sleep_bottom/sleep_top')
+        w.append('    for a bunk. Every bed profile is fixed-facing, so the facing')
+        w.append('    chooser is never consulted for one.')
+        w.append('')
+        w.append('    Their roots are solved for the reference pose (%s),'
+                 % ', '.join(str(a) for a in sleep_refs))
+        w.append('    which this mod does not ship -- it plays sleept1/2/5/6. That')
+        w.append('    costs nothing, and the reason is measured rather than assumed:')
+        w.append('    tools/kf_root_offsets.py on animations/xbase_anim/xSleepT.kf')
+        w.append('    reports Bip01 (6.264, 0.782, 2.328) and Bip01 Pelvis')
+        w.append('    (2.904, 0, 0) for every sleept*/sleepte* group, the same')
+        w.append('    translations the seated reference carries. Morrowind animates')
+        w.append('    bone rotations, not bone translations, so POSE_DELTA is empty')
+        w.append('    for beds exactly as it is for seats.')
+        w.append('')
+        w.append('    Do NOT fold in the %s row from' % ', '.join(str(a) for a in sleep_refs))
+        w.append('    sdp/animationNormalizationOffsets.txt (W=15, D=25, H=15): that')
+        w.append('    file is pose normalization for SDP\'s calibration UI and says')
+        w.append('    in its own header not to use it for bed placement.')
     w.append(']]')
     w.append('')
     w.append('local M = {}')

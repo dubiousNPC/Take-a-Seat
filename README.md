@@ -1,6 +1,8 @@
 # Take a Seat
 
-Sit on furniture in OpenMW. Look at a seat and press Activate to sit; press Activate again to stand.
+Sit on furniture and lie on beds in OpenMW. Look at a seat or a bed and press Activate; press Activate again (or move) to get up.
+
+On a bed, plain Activate lies down and Sneak + Activate opens the bed's own Rest menu (swap them in the settings). On a double, look at the side you want; on a bunk, look at the berth you want.
 
 ## Requirements
 **REQUIRES AnimRefresh_V6**
@@ -29,7 +31,35 @@ local kind  = seats.getSeatType(obj.recordId)   -- "bench" | nil
 local group = kind and seats.SEAT_ANIM[kind]
 ```
 
-Public events sent to the player: `TakeASeat_Seated { furniture, seatType, animGroup }` and `TakeASeat_Stood {}`.
+### Interface: `I.TakeASeat` (player scripts)
+
+```lua
+local tas = I.TakeASeat            -- nil when Take a Seat is not installed
+if tas and tas.isBusy() then ... end
+local st = tas and tas.getState()  -- nil when free
+-- st = { phase = 'entering' | 'seated' | 'standing',
+--        kind = 'seat' | 'bed', subType = 'bench' | 'double' | ...,
+--        furniture = <object>, slot = 'sleep_left' | 'seat_a' | nil,
+--        animGroup = 'sleept2' }   -- lowercase: animation.isPlaying works on it
+tas.standUp()                       -- stands the player up; false if not seated
+```
+
+| function | true while |
+|---|---|
+| `isSeated()` | committed to a seat or bed, until getting up starts |
+| `isBusy()` | seated, or still getting up (stand-up clip, glide) |
+
+Typical use: before mounting, boarding or firing, call `standUp()` (or refuse) when `isBusy()`.
+
+### Events (sent to the player)
+
+| event | when | payload |
+|---|---|---|
+| `TakeASeat_Seated` | a sit/lie is committed (before the enter clip) | `furniture, kind, subType, seatType` (seats only), `slot, animGroup` |
+| `TakeASeat_Stood` | getting up **starts** | `furniture, kind, subType, slot, reason` = `activate` / `move` / `api` / `load` |
+| `TakeASeat_StandComplete` | getting up has **finished**: clip ended, glide landed, controls and collision back | `furniture, kind, subType` (or `reason = 'load'`) |
+
+A save made while seated loads standing; `TakeASeat_Stood` and `TakeASeat_StandComplete` are both sent with `reason = 'load'` so a listener does not stay "seated".
 
 ## Adding seats
 - A record from a plugin that may not be installed goes in `MOD_SEAT_DATABASE` under that plugin's filename. It is merged only when the plugin is loaded.
@@ -52,7 +82,12 @@ Public events sent to the player: `TakeASeat_Seated { furniture, seatType, animG
 - **The chair is moved while seated and restored on stand.** A save made while seated stores the original placement, and loading restores it, so a chair can't drift between saves.
 - **One priority profile per target kind** (`buildAnimProfiles`): idle, enter and exit. Every play and replay of the seated pose uses the idle profile.
 - **The pose is re-issued only when lost.** The AnimRefresh subscription passes no `verify`, and the refresh checks `animation.isPlaying` first: replaying a looping pose restarts it from frame 0.
-- **Enter and exit one-shots** have a 1.5s backstop timer, because a missing clip never sends its ended event; the longest shipped transition measures 1.033s.
+- **Enter and exit one-shots** have a backstop timer, because a missing clip never sends its ended event. It is the clip's own length from its `start`/`stop` text keys plus 0.25s, and a fixed 1.5s only when the keys cannot be read: the bed clips run 1.97s (`sleepte1`) to 4.67s (`sleepte3`) and `getup1` 2.0s, so a fixed 1.5s cut them short.
 - **A group the skeleton lacks resolves to one it has.** `GROUP_FALLBACKS` maps the RA-set transitions onto the `tassit*` clips, which is how a beast-skeleton player gets a sit-down at all.
-- **Beds are off** (`BEDS_ENABLED = false`) until the sleeping clips are confirmed in every skeleton set.
+- **Beds** use the same authored contract as seats (`worldRoot = objectPosition + objectRotation * (slot.root * scale)`), from the solver pack's 289 bed profiles, keyed by model. Two corrections are applied on top, both measured in game (`docs/tickets/`):
+  - **Facing.** The pack's bed yaws face its reference pose; `sleept*` lies the other way, so `BED_POSE_YAW` adds 180° for single, double, bunk and bedroll; hammocks play `sleept6`, which lies across the pack yaw, so they get 90°.
+  - **Type.** When a model has a pack profile its `bedType` wins over the SDP record list (which calls every vanilla bunk "single"); the three vanilla hammock meshes, labelled "single" in the pack, are corrected by model in `BED_TYPE_BY_MODEL`.
+- **Getting off a bed** plays `getup1` in place and steps off after it; a seat glides *with* its stand-up clip.
+- **A bed slot is chosen by where you look** (the aim point on the bed); a seat slot by where you stand.
+- **The bed's vanilla activation** (the Rest menu from `Bed_Standard`) is held back by a global `I.Activation` handler for the press that lies down, so the two never open together.
 - Sitting restores fatigue up to its fortified maximum and never lowers it.

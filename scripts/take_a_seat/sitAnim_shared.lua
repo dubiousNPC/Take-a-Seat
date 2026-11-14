@@ -91,6 +91,21 @@ local GROUP_FALLBACKS = {
     rasitup1 = { "tassitu1" },
     tassitd2 = { "tassitd1" },
     tassitu2 = { "tassitu1" },
+
+    -- The bed ENTER transitions ship only in the third-person folders:
+    -- animations/xbase_anim{,_female,kna}/xSleepT.kf carries sleept1..6 AND
+    -- sleepte1..6, but the three .1st copies carry sleept1..6 only. Without a
+    -- fallback, playableGroup returns nil in first person and the lie-down
+    -- transition is skipped silently. Falling back to the matching held pose
+    -- is the right degradation: the player still ends up lying correctly, just
+    -- without the transition, which is how the rasit/tassit chains above
+    -- already behave.
+    sleepte1 = { "sleept1" },
+    sleepte2 = { "sleept2" },
+    sleepte3 = { "sleept3" },
+    sleepte4 = { "sleept4" },
+    sleepte5 = { "sleept5" },
+    sleepte6 = { "sleept6" },
 }
 
 ---Alternatives for a group, best first, excluding the group itself.
@@ -238,17 +253,46 @@ local function resolveBedByName(byName, label)
 end
 
 local BED_ANIM = resolveBedByName({
-    SINGLE  = "sleepT1",
-    DOUBLE  = "sleepT2",
-    BUNK    = "sleepT5",
-    BEDROLL = "sleepT1",
-    HAMMOCK = "sleepT6",
+    SINGLE  = "sleept1",
+    DOUBLE  = "sleept2",
+    BUNK    = "sleept5",
+    BEDROLL = "sleept1",
+    HAMMOCK = "sleept6",
 }, "BED_ANIM")
 
-local BED_ENTER_ANIM = resolveBedByName({}, "sleeptTE1")
-local BED_EXIT_ANIM  = resolveBedByName({}, "getup1")
+local BED_ENTER_ANIM = resolveBedByName({ SINGLE = "sleepte1", DOUBLE = "sleepte2", BUNK = "sleepte5", BEDROLL = "sleepte1", HAMMOCK = "sleepte6" }, "BED_ENTER_ANIM")
+local BED_EXIT_ANIM  = resolveBedByName({ SINGLE = "getup1", DOUBLE = "getup1", BUNK = "getup1", BEDROLL = "getup1", HAMMOCK = "getup1" }, "BED_EXIT_ANIM")
 
 local BEDS_ENABLED = true
+
+-- Which way the body lies along a bed, relative to the authored slot yaw, in
+-- degrees. The solver pack's bed yaws were solved for its reference pose
+-- (slee8). The root (where the hips land) carries over to sleept* unchanged --
+-- kf_root_offsets.py measures identical Bip01/Pelvis translations -- but the
+-- FACING does not: on every single and double tested in OpenMW 0.52 the
+-- sleept1/sleept2 body lay with its feet on the pillow at the pack yaw and with
+-- its head on the pillow at +180 (docs/tickets/0001). Bunks (sleept5, upper
+-- berth photographed) and bedrolls (sleept1) match. Hammocks play sleept6,
+-- which lies across the pack's yaw: photographed at 0/90/180/270 on
+-- active_de_bed_29/30, only +90 lies along the hammock with the head at the
+-- pillow end. So this is per bed type, not one constant.
+local BED_POSE_YAW = resolveBedByName({
+    SINGLE  = 180,
+    DOUBLE  = 180,
+    BUNK    = 180,
+    BEDROLL = 180,
+    HAMMOCK = 90,
+}, "BED_POSE_YAW")
+
+-- Bed type corrections by MODEL, applied before the solver pack's own
+-- bedType. The pack labels the three vanilla hammock meshes "single"; their
+-- in-game names are Hammock and SDP's own row for active_de_p_bed_28 says
+-- hammock (docs/tickets/0003).
+local BED_TYPE_BY_MODEL = {
+    ['meshes/f/active_de_bed_28.nif'] = BED_TYPE.HAMMOCK,
+    ['meshes/f/active_de_bed_29.nif'] = BED_TYPE.HAMMOCK,
+    ['meshes/f/active_de_bed_30.nif'] = BED_TYPE.HAMMOCK,
+}
 
 -- ---------------------------------------------------------------------------
 -- MISCELLANEOUS ITEMS -- STUB
@@ -574,9 +618,29 @@ local function getBedType(recordId)
     return bed and bed.type or nil
 end
 
-local function isBed(recordId)
+---Bed type from an authored solver profile, keyed by MODEL.
+---
+---The record-id table above comes from the SDP harvest and names 39 beds. The
+---solver pack carries 289, keyed by model path, so this is what lets a bed
+---record from a mod this one has never heard of be recognised as long as it
+---reuses a known mesh -- the same reason the seat path is model-keyed.
+---@param model string|nil a VFS model path, any case, either slash
+---@return string|nil bedType
+local function bedTypeForModel(model)
+    local profile = solverProfile(model)
+    if not profile or profile.kind ~= 'sleep' then return nil end
+    local fixed = BED_TYPE_BY_MODEL[model:lower():gsub('\\', '/')]
+    if fixed then return fixed end
+    local name = profile.bedType and profile.bedType:upper() or nil
+    return (name and BED_TYPE[name]) or BED_TYPE.SINGLE
+end
+
+---@param recordId string|nil
+---@param model string|nil optional, widens the check to the 289 pack profiles
+local function isBed(recordId, model)
     if not BEDS_ENABLED then return false end
-    return getBedType(recordId) ~= nil
+    if getBedType(recordId) ~= nil then return true end
+    return bedTypeForModel(model) ~= nil
 end
 
 ---Placement for a bed record: sleep-root vertical offset and pose yaw.
@@ -594,17 +658,30 @@ local function isMiscItem(recordId)
     return getMiscType(recordId) ~= nil
 end
 
+---@param recordId string|nil
+---@param model string|nil optional; lets a bed be recognised from the
+---       model-keyed solver pack when the record id is not in the SDP list
 ---@return string|nil kind, string|nil subType
-local function classify(recordId)
+local function classify(recordId, model)
     local misc = getMiscType(recordId)
     if misc then return TARGET_KIND.MISC, misc end
     if BEDS_ENABLED then
-        local bed = getBedType(recordId)
+        -- The pack's type wins when the model has a profile: it is the same
+        -- source as the slots being placed (a pack "bunk" has sleep_bottom and
+        -- sleep_top), whereas the SDP record list calls every vanilla bunk
+        -- "single" (docs/tickets/0003). The record list remains the source for
+        -- beds the pack does not cover.
+        local bed = bedTypeForModel(model) or getBedType(recordId)
         if bed then return TARGET_KIND.BED, bed end
     end
     local seat = getSeatType(recordId)
     if seat then return TARGET_KIND.SEAT, seat end
     return nil, nil
+end
+
+---Facing correction in degrees for a bed type's pose (0 for anything else).
+local function bedPoseYaw(bedType)
+    return BED_POSE_YAW[bedType] or 0
 end
 
 ---Idle animation group for any target kind.
@@ -645,6 +722,9 @@ return {
     BED_ANIM                 = BED_ANIM,
     BEDS                     = bedsByRecord,
     getBedType               = getBedType,
+    bedTypeForModel          = bedTypeForModel,
+    bedPoseYaw               = bedPoseYaw,
+    BED_POSE_YAW             = BED_POSE_YAW,
     isBed                    = isBed,
     bedPlacement             = bedPlacement,
 

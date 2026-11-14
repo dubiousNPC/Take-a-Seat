@@ -36,13 +36,23 @@ local SAFETY = {
 -- ---------------------------------------------------------------------------
 
 local getSeatType    = seats.getSeatType
-local isSittable     = seats.isSittable
 local resolveSitAnim = seats.animForSeat
+
+-- Beds are targets too. This takes the OBJECT rather than a record id so a bed
+-- can be recognised from the model-keyed solver pack (289 profiles) and not
+-- only from the 39 record ids the SDP harvest named -- otherwise a pack bed is
+-- placed perfectly by the authored path and then never offered as a target.
+-- Forward-declared: the body needs recordModelOf, which is defined further
+-- down, so the assignment happens there. Every call site below runs long after
+-- load, so the upvalue is set by the time any of them fires.
+local isSittable
+local recordModelOf
 
 local DEBUG = false
 
 local SIT_LOOPS    = 999
-local ONE_SHOT_TIMEOUT = 1.5
+local ONE_SHOT_TIMEOUT = 1.5   -- fallback when a clip's text keys can't be read
+local ONE_SHOT_MARGIN  = 0.25  -- over the clip's own length
 
 -- Per-target-kind priority and blend masks
 local ANIM_PROFILES = seats.buildAnimProfiles(anim)
@@ -115,8 +125,21 @@ local function playOneShot(group, phase, done)
         autoDisable = true,
     })
 
-    -- Backstop. A missing clip never ends because it never started.
-    async:newUnsavableSimulationTimer(ONE_SHOT_TIMEOUT, finish)
+    -- Backstop. A missing clip never ends because it never started. The
+    -- backstop is the clip's OWN length (its start/stop text keys) plus a
+    -- margin, and ONE_SHOT_TIMEOUT only when the keys cannot be read. A fixed
+    -- 1.5s cut the bed clips short: sleepte1 is 1.97s, getup1 2.0s, sleepte3
+    -- 4.67s, so the idle replaced the lie-down early and the step off the bed
+    -- started before getup1 had finished (docs/tickets/0004).
+    local timeout = ONE_SHOT_TIMEOUT
+    if anim.getTextKeyTime then
+        local okA, t0 = pcall(anim.getTextKeyTime, self, group .. ': start')
+        local okB, t1 = pcall(anim.getTextKeyTime, self, group .. ': stop')
+        if okA and okB and type(t0) == 'number' and type(t1) == 'number' and t1 > t0 then
+            timeout = (t1 - t0) + ONE_SHOT_MARGIN
+        end
+    end
+    async:newUnsavableSimulationTimer(timeout, finish)
 end
 
 -- ---------------------------------------------------------------------------
@@ -135,6 +158,7 @@ local FATIGUE_TICK_RATE   = 1     -- seconds
 local FATIGUE_TICK_AMOUNT = 20
 
 local SEAT_KEEP_RATE      = 0.25   -- seconds between checks while seated
+local BED_MODE_RATE       = 0.05   -- seconds; how often the bed Activate/Sneak mode is re-sent if it changed
 local SEAT_KEEP_TOLERANCE = 6      -- units of drift tolerated before a re-assert
 
 local EXIT_GLIDE_TIME  = 0.35      -- seconds
@@ -244,6 +268,10 @@ local originalChairPos = nil
 local originalChairRot = nil
 local currentSitAnim   = nil
 local controlsLocked   = false
+local currentSlotId    = nil     -- authored slot id, nil on the raycast paths
+local standingUp       = false   -- between TakeASeat_Stood and TakeASeat_StandComplete
+local standFurniture, standKind, standSubType = nil, nil, nil
+local standPending     = 0       -- halves of getting up still to finish (clip, glide)
 local standingPos    = nil
 local standingFloorZ = nil
 local standingCell   = nil
@@ -272,7 +300,7 @@ local function tryFurnitureFastPath()
     local obj = result.hitObject
     if not obj or not obj:isValid() then return nil, false end
     if isActorObject(obj) then return nil, true end
-    if not isSittable(obj.recordId) then return nil, false end
+    if not isSittable(obj) then return nil, false end
     return obj, false
 end
 
@@ -322,7 +350,7 @@ local function findFurnitureAsync(done)
     forEachAsync(probes, function(probe, index, finished)
         castPiercing(probe[1], probe[2], MAX_PIERCES, function(res)
             if isActorObject(res.hitObject) then return 'stop' end
-            return res.hitObject ~= nil and isSittable(res.hitObject.recordId)
+            return res.hitObject ~= nil and isSittable(res.hitObject)
         end, function(res)
             if res and res.hitObject then found[index] = res.hitObject end
             finished()
@@ -344,7 +372,7 @@ local SCALE_MIN, SCALE_MAX = 0.25, 4.0
 local MODEL_TYPES = { 'Static', 'Activator', 'Container', 'Door', 'Light',
                       'Miscellaneous' }
 
-local function recordModelOf(obj)
+function recordModelOf(obj)
     if not obj then return nil end
     for _, name in ipairs(MODEL_TYPES) do
         local t = types[name]
@@ -354,6 +382,14 @@ local function recordModelOf(obj)
         end
     end
     return nil
+end
+
+-- Assignment of the forward-declared isSittable, now that recordModelOf exists.
+function isSittable(obj)
+    if not obj then return false end
+    local recordId = obj.recordId
+    if seats.isSittable(recordId) then return true end
+    return seats.isBed(recordId, recordModelOf(obj))
 end
 
 local function clampScale(scale)
@@ -380,7 +416,10 @@ local function localRootFor(slot, chosenYawDeg)
 end
 
 local function resolveSeatPose(furniture)
-    local kind, subType = seats.classify(furniture.recordId)
+    -- The model is passed so a bed whose record id is not in the SDP list is
+    -- still classified as a bed from the model-keyed solver pack. Without it a
+    -- pack bed falls through to getSeatType and plays a sitting clip.
+    local kind, subType = seats.classify(furniture.recordId, recordModelOf(furniture))
     if not kind then
         kind, subType = seats.TARGET_KIND.SEAT, getSeatType(furniture.recordId)
     end
@@ -401,7 +440,12 @@ local function authoredPlacement(furniture, slot, chosenYawDeg)
     local worldYaw = getObjectYaw(furniture) + math.rad(yawDeg)
 
     -- Reference-pose correction, in actor space: x right, y forward, z up.
-    local _, _, group = resolveSeatPose(furniture)
+    local kind, subType, group = resolveSeatPose(furniture)
+    -- A bed slot's yaw was solved for the pack's reference pose; sleept* lies
+    -- the other way along most beds. Per bed type, see BED_POSE_YAW.
+    if kind == seats.TARGET_KIND.BED then
+        worldYaw = worldYaw + math.rad(seats.bedPoseYaw(subType))
+    end
     local delta = seats.poseDelta(group)
     if delta then
         position = position + rotateYaw(
@@ -410,10 +454,27 @@ local function authoredPlacement(furniture, slot, chosenYawDeg)
     return position, worldYaw
 end
 
+---Where the camera ray meets this piece of furniture, or nil.
+local function aimPointOn(furniture)
+    if not (I and I.SharedRay and I.SharedRay.get) then return nil end
+    local ok, res = pcall(I.SharedRay.get)
+    if not ok or not res or not res.hit or res.hitObject ~= furniture then return nil end
+    return res.hitPos
+end
+
 ---@return table|nil slot
 local function nearestSlot(furniture, profile)
     if not profile or not profile.slots or #profile.slots == 0 then return nil end
     if #profile.slots == 1 then return profile.slots[1] end
+
+    -- On a bed the slot is the one being looked at. Measured from the feet, a
+    -- bunk's lower berth is always nearer than the upper one from the floor,
+    -- so the upper berth could never be chosen (docs/tickets/0002). Seats keep
+    -- choosing from the feet, which is what their two-sided benches expect.
+    local from = self.position
+    if profile.kind == 'sleep' then
+        from = aimPointOn(furniture) or from
+    end
 
     local scale = clampScale(furniture.scale)
     local best, bestDist
@@ -422,7 +483,7 @@ local function nearestSlot(furniture, profile)
         local world = furniture.position + furniture.rotation:apply(
             util.vector3(localRoot.x * scale, localRoot.y * scale,
                          localRoot.z * scale))
-        local d = (world - self.position):length()
+        local d = (world - from):length()
         if not bestDist or d < bestDist then best, bestDist = slot, d end
     end
     return best
@@ -498,7 +559,7 @@ local function pushIteration(chairPos, furniture, done)
             local m = meta[idx]
             if res and res.hit and res.hitObject and res.hitObject ~= furniture
                and res.hitObject:isValid()
-               and not isSittable(res.hitObject.recordId) then
+               and not isSittable(res.hitObject) then
                 local dist = math.max(math.sqrt(
                     (res.hitPos.x - chairPos.x)^2 +
                     (res.hitPos.y - chairPos.y)^2), 2)
@@ -569,7 +630,7 @@ local function findSeatSurface(chairPos, furniture, token, done)
         castPiercing(from, to, SEAT_MAX_PIERCES, function(res)
             local obj = res.hitObject
             if obj == furniture or
-               (obj and obj:isValid() and isSittable(obj.recordId)) then
+               (obj and obj:isValid() and isSittable(obj)) then
                 allZHits[#allZHits + 1] = res.hitPos.z
             end
             return res.hitPos.z <= stopZ + 2   -- reached the floor, stop this column
@@ -617,8 +678,8 @@ local function findObstructionAbove(chairPos, furniture, done)
     local blockZ, bailed = nil, false
     castPiercing(from, to, SEAT_MAX_PIERCES, function(res)
         local obj = res.hitObject
-        local rid = (obj and obj:isValid()) and obj.recordId or nil
-        if obj ~= furniture and not isSittable(rid) then
+        local valid = obj and obj:isValid()
+        if obj ~= furniture and not isSittable(valid and obj or nil) then
             blockZ = res.hitPos.z
             return true
         end
@@ -853,6 +914,17 @@ I.Settings.registerGroup {
             renderer    = "checkbox",
             default     = true,
         },
+        {
+            key         = "BED_ACTIVATE_LIES",
+            name        = "Activate on a bed lies down",
+            description = "On: Activate lies down on a bed and Sneak + Activate"
+                        .. " opens the bed's own Rest menu. Off: the other way"
+                        .. " round. Whichever one lies down, the bed's Rest"
+                        .. " menu is held back for that press so the two do"
+                        .. " not open together.",
+            renderer    = "checkbox",
+            default     = true,
+        },
     },
 }
 
@@ -1005,16 +1077,23 @@ local function commitSit(furniture, chairPos, sitPos, yaw, yawAbsolute)
         furniturePos = chairPos,
     })
 
-    -- Public hook. Add-ons
+    -- Public hook (README: For other mods). seatType stays as before for
+    -- seats; kind/subType say bed or seat for everything, slot names the
+    -- authored slot (sleep_left, sleep_top, seat_a ...), and animGroup is
+    -- lowercase so animation.isPlaying(actor, animGroup) works on it.
     self.object:sendEvent('TakeASeat_Seated', {
         furniture = furniture,
-        seatType  = getSeatType(furniture.recordId),
-        animGroup = currentSitAnim,
+        kind      = currentKind,
+        subType   = currentSubType,
+        seatType  = currentKind == seats.TARGET_KIND.SEAT and getSeatType(furniture.recordId) or nil,
+        slot      = currentSlotId,
+        animGroup = currentSitAnim and currentSitAnim:lower() or nil,
     })
 
     isSitting      = true
     sitAnimStarted = false
     resolveActive  = false
+    standingUp, standPending = false, 0
     setSeatCollision(false)
     startHoldingSeat(sitPos)
     lockControls()
@@ -1076,6 +1155,24 @@ local function beginSit(furniture)
     local profile = seats.solverProfile(model)
     local slot    = nearestSlot(furniture, profile)
 
+    -- Beds go down this same path. The contract is identical to the seat one --
+    -- `root` is a solved actor root in the object's own frame and `yaw` is
+    -- relative to the object -- so there is nothing bed-specific to do here.
+    --
+    -- The pack solves bed roots for the reference pose `slee8`, which this mod
+    -- does not ship; it plays sleept1/2/5/6. That difference was measured
+    -- rather than assumed: tools/kf_root_offsets.py on
+    -- animations/xbase_anim/xSleepT.kf reports Bip01 (6.264, 0.782, 2.328) and
+    -- Bip01 Pelvis (2.904, 0, 0) for every sleept*/sleepte* group, which are
+    -- the same translations the seated reference dbssit5 carries. Morrowind
+    -- animates bone rotations, not bone translations, so the hips land in the
+    -- same place whichever of these clips plays and POSE_DELTA stays empty for
+    -- beds exactly as it is for seats.
+    --
+    -- Do NOT fold in the slee8 row from sdp/animationNormalizationOffsets.txt
+    -- (W=15, D=25, H=15). That file is animation-pose normalization for SDP's
+    -- own calibration UI and says in its own header not to use it for bed
+    -- placement; the measurement above is why there is nothing to correct.
     if profile and slot then
         chooseFacing(furniture, profile, slot, function(chosenYawDeg)
             if token ~= resolveToken then return end
@@ -1091,8 +1188,38 @@ local function beginSit(furniture)
                     tostring(chosenYawDeg or slot.yaw)))
             end
             -- chairPos nil: the furniture stays where the author placed it.
+            currentSlotId = slot.id
             gateAndCommit(furniture, nil, sitPos, worldYaw, true)
         end)
+        return
+    end
+
+    -- Fallback for a bed with no authored profile: lie on the measured top
+    -- surface at the bounding-box centre. This is the old prototype, kept only
+    -- as a last resort, because the bbox centre is the middle of the mattress
+    -- and so puts a double or a bunk in the wrong place by construction -- the
+    -- authored path above is what resolves sleep_left/right and
+    -- sleep_bottom/top. A bed must not fall through to resolveChairPosition
+    -- below: that path applies seat pivot offsets and a seat-height raycast,
+    -- neither of which means anything on a mattress.
+    if seats.isBed(furniture.recordId, model) then
+        local bb  = furniture:getBoundingBox()
+        local top = bb.center + util.vector3(0, 0, bb.halfSize.z + 40)
+        local hit = nearby.castRay(top, bb.center - util.vector3(0, 0, bb.halfSize.z + 5),
+                                   { ignore = self })
+        local z = (hit.hit and hit.hitPos.z) or (bb.center.z + bb.halfSize.z)
+        local place = seats.bedPlacement(furniture.recordId)
+        local yaw = getObjectYaw(furniture) + math.rad((place and place.yaw or 0) + 180)
+        if DEBUG then
+            print(string.format(
+                "[sit] bed %s has no authored profile (model=%s); bbox-centre fallback "
+                .. "type=%s z=%.1f yaw=%.1f",
+                tostring(furniture.recordId), tostring(model),
+                tostring(seats.getBedType(furniture.recordId)
+                         or seats.bedTypeForModel(model)),
+                z, math.deg(yaw)))
+        end
+        gateAndCommit(furniture, nil, util.vector3(bb.center.x, bb.center.y, z), yaw, true)
         return
     end
 
@@ -1168,7 +1295,22 @@ local function commitStandPoint(furniture)
     return glide and EXIT_GLIDE_TIME or 0
 end
 
-local function stopSitting()
+-- TakeASeat_StandComplete goes out once BOTH halves of getting up are done:
+-- controls released (the exit clip has ended) and collision restored (the
+-- glide has landed). Until then getState() reports phase 'standing'.
+local function standPartDone()
+    if standPending <= 0 then return end
+    standPending = standPending - 1
+    if standPending > 0 then return end
+    standingUp = false
+    self.object:sendEvent('TakeASeat_StandComplete', {
+        furniture = standFurniture, kind = standKind, subType = standSubType,
+    })
+    standFurniture, standKind, standSubType = nil, nil, nil
+end
+
+---@param reason string|nil 'activate' | 'move' | 'api' (default 'activate')
+local function stopSitting(reason)
     if not isSitting then return end
     anim.cancel(self, currentSitAnim)
 
@@ -1178,7 +1320,15 @@ local function stopSitting()
     isSitting      = false
     sitAnimStarted = false
     abortResolve()
-    self.object:sendEvent('TakeASeat_Stood', {})
+    standingUp, standPending = true, 2
+    standFurniture, standKind, standSubType = currentFurniture, currentKind, currentSubType
+    -- Sent as getting up STARTS: the exit clip, the glide, collision and the
+    -- control release follow, and TakeASeat_StandComplete marks their end.
+    self.object:sendEvent('TakeASeat_Stood', {
+        furniture = currentFurniture, kind = currentKind, subType = currentSubType,
+        slot = currentSlotId, reason = reason or 'activate',
+    })
+    currentSlotId = nil
 
     unsubscribeRefresh()
     clearCameraOffset()
@@ -1194,14 +1344,35 @@ local function stopSitting()
     currentFurniture, originalChairPos, originalChairRot = nil, nil, nil
 
     stopHoldingSeat()
+    -- On a bed, get up in place first and step off afterwards: getup1 rises
+    -- from lying with no root motion (static Bip01, 0.3 units of pelvis
+    -- travel), so gliding during it would play the rise beside the bed. Seats
+    -- glide WITH their stand-up clip, which is what that clip is made for.
+    if currentKind == seats.TARGET_KIND.BED and exitGroup then
+        playOneShot(exitGroup, 'exit', function()
+            local mt = commitStandPoint(furnitureRef)
+            async:newUnsavableSimulationTimer(mt + 0.05, function()
+                if isSitting then return end
+                setSeatCollision(true)
+                releaseControls()
+                standPartDone(); standPartDone()
+            end)
+        end)
+        currentKind, currentSubType = nil, nil
+        return
+    end
     local moveTime = commitStandPoint(furnitureRef)
 
     async:newUnsavableSimulationTimer(moveTime + 0.05, function()
         if isSitting then return end
         setSeatCollision(true)
+        standPartDone()
     end)
 
-    playOneShot(exitGroup, 'exit', releaseControls)
+    playOneShot(exitGroup, 'exit', function()
+        releaseControls()
+        standPartDone()
+    end)
     currentKind, currentSubType = nil, nil
 end
 
@@ -1209,13 +1380,42 @@ end
 -- EVENT WIRING
 -- ---------------------------------------------------------------------------
 
+-- Whether a plain Activate on a bed lies down right now: the setting says
+-- which of Activate / Sneak + Activate lies down, and the other one is left to
+-- the bed's own Rest menu. The global script blocks the bed's vanilla
+-- activation for the press that lies down (docs/tickets/0006).
+local function bedPressLies()
+    local plain = seatingSettings:get("BED_ACTIVATE_LIES") ~= false
+    local sneak = self.controls and self.controls.sneak and true or false
+    return plain ~= sneak
+end
+
+local lastBedMode = nil
+local function syncBedMode()
+    local lie = bedPressLies()
+    if lie == lastBedMode then return end
+    lastBedMode = lie
+    core.sendGlobalEvent('TakeASeat_BedActivateMode', { player = self.object, lie = lie })
+end
+
+-- Kept current on a short timer rather than a frame handler (the global needs
+-- it before the press, and a sneak toggle is a human-speed event).
+time.runRepeatedly(syncBedMode, BED_MODE_RATE)
+seatingSettings:subscribe(async:callback(function() lastBedMode = nil; syncBedMode() end))
+
 input.registerTriggerHandler("Activate", async:callback(function()
     if I.UI and I.UI.getMode() ~= nil then return end
+    syncBedMode()
     if isSitting then
-        stopSitting()
+        stopSitting('activate')
     elseif not resolveActive then
         findFurnitureAsync(function(furniture)
-            if furniture then beginSit(furniture) end
+            if not furniture then return end
+            if seats.isBed(furniture.recordId, recordModelOf(furniture))
+               and not bedPressLies() then
+                return   -- this press is the bed's own (Rest)
+            end
+            beginSit(furniture)
         end)
     end
 end))
@@ -1242,7 +1442,7 @@ local function bindStandUpActions()
         if input.actions[key] then
             input.registerActionHandler(key, async:callback(function(value)
                 if isSitting and sitAnimStarted and actionPressed(value) then
-                    stopSitting()
+                    stopSitting('move')
                 end
             end))
             bound[#bound + 1] = key
@@ -1252,7 +1452,7 @@ local function bindStandUpActions()
             -- nothing while seated. Measured in-engine with vanilla bindings.
             input.registerTriggerHandler(key, async:callback(function()
                 if I.UI and I.UI.getMode() ~= nil then return end
-                if isSitting and sitAnimStarted then stopSitting() end
+                if isSitting and sitAnimStarted then stopSitting('move') end
             end))
             bound[#bound + 1] = key .. ' (trigger)'
         else
@@ -1354,9 +1554,16 @@ local function onLoad(data)
         collisionDisabled = false
         if data and data.exit then core.sendGlobalEvent('SitPlacePlayer', { position = data.exit }) end
     end
+    standingUp, standPending = false, 0
+    standFurniture, standKind, standSubType = nil, nil, nil
+    currentSlotId = nil
     if data and data.controlsLocked then
         controlsLocked = true
         releaseControls()
+        -- A save made seated (or mid stand-up) loads standing. Listeners that
+        -- tracked TakeASeat_Seated would otherwise stay "seated" for good.
+        self.object:sendEvent('TakeASeat_Stood', { reason = 'load' })
+        self.object:sendEvent('TakeASeat_StandComplete', { reason = 'load' })
     else
         controlsLocked = false
     end
@@ -1366,7 +1573,49 @@ local function onLoad(data)
     end
 end
 
+-- ---------------------------------------------------------------------------
+-- INTERFACE (I.TakeASeat) -- see README "For other mods"
+-- ---------------------------------------------------------------------------
+local function getState()
+    local phase
+    if isSitting then
+        phase = sitAnimStarted and 'seated' or 'entering'
+    elseif standingUp then
+        phase = 'standing'
+    else
+        return nil
+    end
+    return {
+        phase     = phase,
+        kind      = isSitting and currentKind or standKind,
+        subType   = isSitting and currentSubType or standSubType,
+        furniture = isSitting and currentFurniture or standFurniture,
+        slot      = currentSlotId,
+        animGroup = isSitting and currentSitAnim and currentSitAnim:lower() or nil,
+    }
+end
+
 return {
-    engineHandlers = { onSave = onSave, onLoad = onLoad },
+    interfaceName = 'TakeASeat',
+    interface = {
+        version   = 1,
+        ---true from the moment a sit is committed until getting up starts.
+        isSeated  = function() return isSitting end,
+        ---true while seated, entering, or still getting up (clip / glide).
+        isBusy    = function() return isSitting or standingUp end,
+        ---nil when free; else { phase = 'entering'|'seated'|'standing', kind,
+        ---subType, furniture, slot, animGroup }.
+        getState  = getState,
+        ---Stand the player up (reason 'api'). Returns false if not seated.
+        standUp   = function()
+            if not isSitting then return false end
+            stopSitting('api')
+            return true
+        end,
+    },
+    engineHandlers = {
+        onSave   = onSave,
+        onLoad   = onLoad,
+    },
     eventHandlers  = { SitAnimStart = onSitAnimStart },
 }

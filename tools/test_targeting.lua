@@ -234,23 +234,57 @@ check('the restore is sent only when a placement was recorded',
 -- still held until the clip finishes.
 local stand = src:match('(local function stopSitting.-\nend\n)')
 assert(stand, 'could not extract stopSitting')
-local moveAt = stand:find('commitStandPoint%(furnitureRef%)')
-local clipAt = stand:find("playOneShot%(exitGroup, 'exit'")
+
+-- Beds take their own route out and must be held apart from the seat one.
+-- A seat's stand point is beside the chair, so moving WITH the clip hides the
+-- distance. A bed's stand point is off the far side of the mattress, and
+-- getup1 stands the body up in place: measured on
+-- animations/xbase_anim/xdbsWakeUp.kf, Bip01 does not move at all and
+-- Bip01 Pelvis travels 0.30 units horizontally while rising 69.1 in z
+-- (-70.29 -> -1.17). Gliding that whole distance under a clip that reads as
+-- "stand up where you are" looks like sliding, so the bed path plays the clip
+-- first and steps off after.
+local bedFrom, bedTo =
+    stand:find('if currentKind == seats%.TARGET_KIND%.BED and exitGroup then.-\n    end\n')
+local bedBranch = bedFrom and stand:sub(bedFrom, bedTo) or nil
+local seatStand = bedFrom
+    and (stand:sub(1, bedFrom - 1) .. stand:sub(bedTo + 1))
+    or stand
+
+check('beds leave by their own branch', bedBranch ~= nil)
+if bedBranch then
+    local bClip = bedBranch:find("playOneShot%(exitGroup, 'exit'")
+    local bMove = bedBranch:find('commitStandPoint%(furnitureRef%)')
+    check('a bed plays the stand-up clip before it steps off the mattress',
+          bClip ~= nil and bMove ~= nil and bClip < bMove,
+          tostring(bClip) .. ' vs ' .. tostring(bMove))
+    check('the bed branch returns rather than falling into the seat path',
+          bedBranch:find('\n        return\n') ~= nil)
+    check('the bed branch clears the kind so the next sit reclassifies',
+          bedBranch:find('currentKind, currentSubType = nil, nil') ~= nil)
+    check('the bed branch restores collision exactly once',
+          select(2, bedBranch:gsub('setSeatCollision%(true%)', '')) == 1)
+    check('and releases controls once the clip has ended',
+          bedBranch:find('releaseControls%(%)') ~= nil)
+end
+
+local moveAt = seatStand:find('commitStandPoint%(furnitureRef%)')
+local clipAt = seatStand:find("playOneShot%(exitGroup, 'exit'")
 check('the move is started from stopSitting, not from the clip callback',
       moveAt ~= nil and clipAt ~= nil and moveAt < clipAt,
       tostring(moveAt) .. ' vs ' .. tostring(clipAt))
 check('controls are still released on the clip ending',
-      stand:find("playOneShot%(exitGroup, 'exit', releaseControls%)") ~= nil)
+      seatStand:find("playOneShot%(exitGroup, 'exit', function%(%)\n%s*releaseControls%(%)") ~= nil)
 check('the seat keeper is stopped before the player is moved',
-      stand:find('stopHoldingSeat%(%)') ~= nil
-      and stand:find('stopHoldingSeat%(%)') < moveAt)
+      seatStand:find('stopHoldingSeat%(%)') ~= nil
+      and seatStand:find('stopHoldingSeat%(%)') < moveAt)
 
 -- Collision goes back on when the move has landed, and not before: with it off
 -- neither the seat nor the table can push the player mid-glide.
 check('collision is restored on a timer sized by the move',
-      stand:find('newUnsavableSimulationTimer%(moveTime %+ 0%.05') ~= nil)
+      seatStand:find('newUnsavableSimulationTimer%(moveTime %+ 0%.05') ~= nil)
 check('and that is the only place it is restored during a stand-up',
-      select(2, stand:gsub('setSeatCollision%(true%)', '')) == 1)
+      select(2, seatStand:gsub('setSeatCollision%(true%)', '')) == 1)
 -- Sitting down again inside the glide window would otherwise hand collision
 -- back while seated, and leave the keeper nudging for the rest of the sit.
 check('a sit inside the glide window keeps collision off',

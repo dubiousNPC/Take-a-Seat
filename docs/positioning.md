@@ -156,6 +156,94 @@ reads three columns -- `RecordID`, `SeatType`, `FinalZOffset` -- and the update
 touched none of them. Regenerating `furniture_profiles.lua` before and after
 the sync gives byte-identical data.
 
+## Beds
+
+Beds go down the **same authored path as seats**. There is nothing
+bed-specific in the placement arithmetic:
+
+    worldRoot = objectPosition + objectRotation * (slot.root * scale)
+    worldYaw  = objectYaw + rad(slot.yaw)
+
+`solver_profiles.lua` carries 289 bed profiles (`kind = 'sleep'`) beside the
+189 sitting ones, keyed by model, with `bedType` in place of `seatType` and
+named slots: `sleep_main`, `sleep_left`/`sleep_right` on a double,
+`sleep_bottom`/`sleep_top` on a bunk. All 289 are fixed-facing, so the facing
+chooser is never consulted for one.
+
+### Why no pose delta
+
+The pack solves bed roots for the reference pose `slee8`, which this mod does
+not ship -- it plays `sleept1/2/5/6`. That difference is zero, and it was
+measured rather than assumed. `tools/kf_root_offsets.py` on
+`animations/xbase_anim/xSleepT.kf` reports, for every `sleept*` and `sleepte*`
+group:
+
+    Bip01         (6.264, 0.782, 2.328)
+    Bip01 Pelvis  (2.904, 0.000, 0.000)
+
+which are the same translations the seated reference `dbssit5` carries.
+Morrowind animates bone rotations, not bone translations, so the hips land in
+the same place whichever of these clips plays. `POSE_DELTA` stays empty for
+beds for the same reason it is empty for seats: it was measured to be zero.
+
+**Do not fold in the `slee8` row from
+`sdp/animationNormalizationOffsets.txt` (W=15, D=25, H=15).** That file is
+animation-pose normalization for SDP's own calibration UI and says in its own
+header not to use it for bed placement. The measurement above is why there is
+nothing to correct.
+
+### What the per-record SDP bed tables are, and are not
+
+`furniture_profiles.lua`'s `M.BEDS` is the older SDP harvest: 39 records, of
+which the runtime now reads only `yaw`, and only on the fallback path. Its
+`z` column is `-180` on every row and is not a vertical offset; its `slots`
+string is not parsed. `sdp/bedProfileVariants.txt` is a **calibration log, not
+runtime data**: its per-`YawBucket90` rows are independent world-space
+captures rather than rotations of one another, and four `(record, slot,
+bucket)` keys carry two conflicting rows each --
+
+    active_com_bed_02      / sleep_main / 90  -> 40,-5,10    and 40,75,-20
+    active_com_bed_02      / sleep_main / 0   -> -40,25,10   and -15,110,10
+    ab_furn_demidbedbunk03 / sleep_main / 90  -> 25.778,-87.556,-15 and -100.222,-7.556,-20
+    active_de_p_bed_28     / sleep_main / 0   -> 34.778,32.444,-30  and 14.778,-67.556,-125
+
+-- so nothing may key placement off it.
+
+### The fallback, and why it is only a fallback
+
+A bed with no authored profile lies at the bounding-box centre with a downward
+ray for z. That is the middle of the mattress, so a double or a bunk has both
+of its slots collapse onto one point: it cannot express
+`sleep_left`/`sleep_right` or `sleep_bottom`/`sleep_top` at all. It is kept
+only so an unknown bed still works. A bed must never fall through to
+`resolveChairPosition`, which applies seat pivot offsets and a seat-height
+raycast.
+
+### Checks
+
+* `tools/test_solver_profiles.lua` -- the contract, bed types, multi-slot
+  separation, classification by model.
+* `tools/test_beds_sweep.lua` -- all 289 profiles and 430 slots through the
+  real lifted placement helpers at all four 90° object yaws, 2284 assertions:
+  frame invariance, yaw composition, scale linearity, slot separation. The
+  closest two slots on any bed at any yaw are 49.77 units apart.
+* `tools/check_bed_surfaces.py` -- validates the authored roots against the
+  **real game meshes** read straight out of the BSAs (`tools/bsa_read.py`),
+  dropping a vertical ray through the mesh at each slot. Needs game data, so it
+  is not part of `run_check_all.py`:
+
+      python3 tools/check_bed_surfaces.py \
+          data_solver_profiles/solver-profiles.json /path/to/Data\ Files
+
+  On the 41 vanilla beds (54 slots) every root is inside the mesh footprint and
+  the median root sits **+1.44 units** above the visible surface directly under
+  it, 30 of 54 within ±2 and 49 of 54 within ±8. The roots track the *visible*
+  mattress, not the collision proxy (median +1.44 against +5.72, p90 +7.74
+  against +42.37), which is worth knowing before anyone "fixes" a height
+  against a collision box. One row to eyeball in game:
+  `meshes/f/furn_dwrv_bed00.nif/sleep_main`, whose root has no visible surface
+  beneath it at all and sits 3.8 below the collision surface.
+
 ## The gap behind that (what motivated the rework)
 
 Before v0.39 this mod consumed **no** per-record placement offset for chairs. It takes the

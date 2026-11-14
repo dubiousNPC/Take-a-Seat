@@ -41,14 +41,41 @@ check('the provider declares the contract the runtime expects',
 check('the contract is version 3', solver.contractVersion == 3)
 
 local profileCount, slotCount, anchored = 0, 0, 0
+local sitCount, sleepCount, sitSlots, sleepSlots = 0, 0, 0, 0
 local badKey, badSlot, badType, badFacing = {}, {}, {}, {}
+local badBedType, multiBed, badBedSlots = {}, 0, {}
 local SEAT_TYPES, POLICIES = {}, { fixed = true, two_sided = true, free = true }
+local BED_TYPES = {}
 for _, t in pairs(seats.SEAT_TYPE) do SEAT_TYPES[t] = true end
+for _, t in pairs(seats.BED_TYPE) do BED_TYPES[t] = true end
 
 for key, profile in pairs(solver.PROFILES) do
     profileCount = profileCount + 1
     if key ~= key:lower() or key:find('\\', 1, true) or not key:find('^meshes/') then
         badKey[#badKey + 1] = key
+    end
+    if profile.kind == 'sleep' then
+        sleepCount = sleepCount + 1
+        sleepSlots = sleepSlots + #profile.slots
+        -- A bedType the mod does not map would reach idleAnimFor as nil and
+        -- play no sleep clip at all, which is exactly the silent-nil failure
+        -- the seat-type assert below was added for.
+        if not BED_TYPES[profile.bedType] then
+            badBedType[#badBedType + 1] = key .. '=' .. tostring(profile.bedType)
+        end
+        if #profile.slots > 1 then
+            multiBed = multiBed + 1
+            -- Two slots that resolve to the same point are the bbox-centre
+            -- fault the authored path exists to fix, so they must differ.
+            local a, b = profile.slots[1].root, profile.slots[2].root
+            local dx, dy, dz = a[1] - b[1], a[2] - b[2], a[3] - b[3]
+            if math.sqrt(dx * dx + dy * dy + dz * dz) < 1 then
+                badBedSlots[#badBedSlots + 1] = key
+            end
+        end
+    elseif profile.kind == 'sit' then
+        sitCount = sitCount + 1
+        sitSlots = sitSlots + #profile.slots
     end
     if profile.kind == 'sit' then
         if not SEAT_TYPES[profile.seatType] then
@@ -71,8 +98,21 @@ for key, profile in pairs(solver.PROFILES) do
     end
 end
 
-check('all 189 sit profiles are present', profileCount == 189, profileCount)
-check('all 230 slots are present', slotCount == 230, slotCount)
+-- Counts are hardcoded on purpose: the pack states them in PACK-MANIFEST.json,
+-- and a regeneration that quietly drops or doubles profiles is exactly what
+-- this catches. Beds were emitted from v0.43 (gen_solver_profiles.py --sleep);
+-- before that the sit half shipped alone and these read 189 / 230.
+check('all 478 profiles are present', profileCount == 478, profileCount)
+check('189 of them are sit profiles', sitCount == 189, sitCount)
+check('289 of them are sleep profiles', sleepCount == 289, sleepCount)
+check('all 660 slots are present', slotCount == 660, slotCount)
+check('230 seat slots', sitSlots == 230, sitSlots)
+check('430 sleep slots', sleepSlots == 430, sleepSlots)
+check('every bed type is one this mod maps to a clip',
+      #badBedType == 0, table.concat(badBedType, ' '))
+check('141 beds carry more than one sleep slot', multiBed == 141, multiBed)
+check('no multi-slot bed puts both slots in the same place',
+      #badBedSlots == 0, table.concat(badBedSlots, ' '))
 check('every key is a lowercase forward-slash mesh path',
       #badKey == 0, table.concat(badKey, ' '))
 check('every slot carries a usable root and yaw',
@@ -99,7 +139,11 @@ end
 -- so the normalisation is load-bearing, not cosmetic.
 local sample, sampleProfile
 for key, profile in pairs(solver.PROFILES) do
-    if profile.facing == 'fixed' then sample, sampleProfile = key, profile; break end
+    -- a one-slot SEAT profile: since v0.43 a fixed profile may also be a
+    -- two-slot bed, and pairs() order varies run to run under Lua 5.4.
+    if profile.facing == 'fixed' and profile.kind ~= 'sleep' and #profile.slots == 1 then
+        sample, sampleProfile = key, profile; break
+    end
 end
 assert(sample, 'the pack has no fixed-facing profile to test with')
 
@@ -180,6 +224,10 @@ local env = {
     self = { position = vec(0, 0, 0) },
     getSeatType = seats.getSeatType,
     resolveSitAnim = seats.animForSeat,
+    -- recordModelOf lives above the extracted span. resolveSeatPose passes the
+    -- model to seats.classify so a bed from the model-keyed pack is not
+    -- mistaken for a seat, so the stub reads it off the fixture object.
+    recordModelOf = function(obj) return obj and obj.model or nil end,
 }
 local chunk = load(body .. [[
 return { clampScale = clampScale, rotateYaw = rotateYaw, vec3 = vec3,
@@ -347,7 +395,7 @@ check('the delta is looked up by the seated clip',
 -- up to.
 local bench = nil
 for _, profile in pairs(solver.PROFILES) do
-    if #profile.slots > 1 then bench = profile; break end
+    if #profile.slots > 1 and profile.kind ~= 'sleep' then bench = profile; break end
 end
 assert(bench, 'the pack has no multi-slot profile to test with')
 check('the test bench really has two seats', #bench.slots == 2, #bench.slots)
@@ -376,6 +424,152 @@ check('a one-seat profile returns its slot',
 check('no profile means no slot', P.nearestSlot(benchFurn, nil) == nil)
 check('an empty slot list means no slot',
       P.nearestSlot(benchFurn, { slots = {} }) == nil)
+
+-- A bunk's berth is picked by where the player looks, not by the feet: from
+-- the floor the lower berth is always nearer the feet, so the upper berth
+-- could never be chosen (docs/tickets/0002). Seats still measure from the feet.
+do
+    local bunkKey = 'meshes/f/furn_com_bunk_01.nif'
+    local bunk = solver.PROFILES[bunkKey]
+    check('the vanilla bunk is a two-berth sleep profile',
+          bunk and bunk.kind == 'sleep' and #bunk.slots == 2)
+    if bunk then
+        local furn = { position = vec(0, 0, 0), rotation = rotZ(0), scale = 1, model = bunkKey }
+        local function world(id)
+            for _, sl in ipairs(bunk.slots) do
+                if sl.id == id then return furn.position + furn.rotation:apply(P.localRootFor(sl, nil)), sl end
+            end
+        end
+        local bottomW, bottom = world('sleep_bottom')
+        local topW, top = world('sleep_top')
+        env.self.position = bottomW + vec(60, 0, -bottomW.z)   -- standing on the floor beside it
+        env.I = nil
+        check('no aim: the feet pick the lower berth', P.nearestSlot(furn, bunk) == bottom)
+        env.I = { SharedRay = { get = function() return { hit = true, hitObject = furn, hitPos = topW + vec(0, 0, 4) } end } }
+        check('looking at the upper berth picks it', P.nearestSlot(furn, bunk) == top)
+        env.I = { SharedRay = { get = function() return { hit = true, hitObject = furn, hitPos = bottomW + vec(0, 0, 4) } end } }
+        check('looking at the lower berth picks it', P.nearestSlot(furn, bunk) == bottom)
+        env.I = { SharedRay = { get = function() return { hit = true, hitObject = {}, hitPos = topW } end } }
+        check('an aim on some other object is ignored', P.nearestSlot(furn, bunk) == bottom)
+        env.I = { SharedRay = { get = function() return { hit = true, hitObject = benchFurn, hitPos = w2 } end } }
+        env.self.position = w1 + vec(0, 0, 20)
+        check('a bench still picks from the feet even when aimed at the other seat',
+              P.nearestSlot(benchFurn, bench) == bench.slots[1])
+        env.I = nil
+        env.self.position = vec(0, 0, 0)
+    end
+end
+
+-- ---------------------------------------------------------------------------
+-- beds on the authored path
+-- ---------------------------------------------------------------------------
+-- Beds used to be placed at the bounding-box centre with a downward raycast
+-- for z. That is the middle of the mattress, so a double or a bunk had both of
+-- its authored slots collapse onto one point. These checks are the reason the
+-- bed path now goes through exactly the same contract as the seats.
+
+local function bedOfType(wanted, minSlots)
+    for key, profile in pairs(solver.PROFILES) do
+        if profile.kind == 'sleep' and profile.bedType == wanted
+           and #profile.slots >= (minSlots or 1) then
+            return profile, key
+        end
+    end
+end
+
+local double, doubleKey = bedOfType(seats.BED_TYPE.DOUBLE, 2)
+local bunk,   bunkKey   = bedOfType(seats.BED_TYPE.BUNK, 2)
+local single, singleKey = bedOfType(seats.BED_TYPE.SINGLE, 1)
+assert(double and bunk and single, 'the pack is missing a bed type to test with')
+
+check('a double bed carries two slots', #double.slots == 2, #double.slots)
+check('its slots are named left/right or a/b',
+      double.slots[1].id:find('^sleep_') ~= nil
+      and double.slots[2].id ~= double.slots[1].id,
+      double.slots[1].id .. '/' .. double.slots[2].id)
+
+local bedFurn = { position = vec(100, -50, 20), rotation = rotZ(0), scale = 1,
+                  recordId = 'test_bed', model = doubleKey }
+local function bedWorld(furn, slot, yawDeg)
+    local pos = select(1, P.authoredPlacement(furn, slot, yawDeg))
+    return pos
+end
+
+local d1 = bedWorld(bedFurn, double.slots[1])
+local d2 = bedWorld(bedFurn, double.slots[2])
+check('the two sides of a double are apart', (d1 - d2):length() > 10,
+      string.format('%.2f apart', (d1 - d2):length()))
+
+-- A bunk's two slots differ mainly in z. The bbox centre could never express
+-- this: one mattress is above the other, not beside it.
+local b1 = bedWorld({ position = vec(0, 0, 0), rotation = rotZ(0), scale = 1,
+                      recordId = 'test_bunk', model = bunkKey }, bunk.slots[1])
+local b2 = bedWorld({ position = vec(0, 0, 0), rotation = rotZ(0), scale = 1,
+                      recordId = 'test_bunk', model = bunkKey }, bunk.slots[2])
+check('a bunk separates its berths vertically', math.abs(b1.z - b2.z) > 20,
+      string.format('%.2f in z', math.abs(b1.z - b2.z)))
+
+-- The offset must ride the object's rotation. A bed rotated 90 degrees in a
+-- cell has to put the sleeper on the same side of the same mattress, which is
+-- what the bbox-centre path got right by accident and the authored path must
+-- get right on purpose.
+local slot = single.slots[1]
+local straight = { position = vec(0, 0, 0), rotation = rotZ(0), scale = 1,
+                   recordId = 'test_single', model = singleKey }
+local turned   = { position = vec(0, 0, 0), rotation = rotZ(math.pi / 2), scale = 1,
+                   recordId = 'test_single', model = singleKey }
+local sw, tw = bedWorld(straight, slot), bedWorld(turned, slot)
+local localLen = math.sqrt(slot.root[1]^2 + slot.root[2]^2)
+check('rotating the bed keeps the sleeper at the same distance from its origin',
+      near(math.sqrt(sw.x^2 + sw.y^2), localLen, 1e-3)
+      and near(math.sqrt(tw.x^2 + tw.y^2), localLen, 1e-3),
+      string.format('%.4f / %.4f vs %.4f',
+                    math.sqrt(sw.x^2 + sw.y^2), math.sqrt(tw.x^2 + tw.y^2), localLen))
+check('and the height is unchanged by yaw', near(sw.z, tw.z, 1e-6),
+      string.format('%.4f vs %.4f', sw.z, tw.z))
+check('a rotated bed does not place the sleeper in the same spot',
+      (sw - tw):length() > 1, string.format('%.3f', (sw - tw):length()))
+
+-- Scale multiplies the local root before it is rotated, exactly as for seats.
+local scaled = { position = vec(0, 0, 0), rotation = rotZ(0), scale = 2,
+                 recordId = 'test_single', model = singleKey }
+check('bed scale multiplies the authored root',
+      near((bedWorld(scaled, slot)).z, sw.z * 2, 1e-3),
+      string.format('%.4f vs %.4f', (bedWorld(scaled, slot)).z, sw.z * 2))
+
+-- Every bed in the pack is fixed-facing, so the facing chooser must never be
+-- consulted for one; a two_sided bed would need anchor/poseDelta it has not got.
+local freeBed = nil
+for key, profile in pairs(solver.PROFILES) do
+    if profile.kind == 'sleep' and profile.facing ~= 'fixed' then freeBed = key; break end
+end
+check('every bed profile is fixed-facing', freeBed == nil, tostring(freeBed))
+
+-- Classification by MODEL is what gives the bed path its reach: the SDP
+-- record-id list names 39 beds, the pack covers 289 models.
+check('a bed is classified from its model alone',
+      select(1, seats.classify('a_record_nobody_listed', singleKey))
+          == seats.TARGET_KIND.BED,
+      tostring(select(1, seats.classify('a_record_nobody_listed', singleKey))))
+check('and resolves to that bed type',
+      select(2, seats.classify('a_record_nobody_listed', bunkKey))
+          == seats.BED_TYPE.BUNK,
+      tostring(select(2, seats.classify('a_record_nobody_listed', bunkKey))))
+check('which maps to a sleep clip',
+      seats.idleAnimFor(seats.TARGET_KIND.BED,
+                        seats.bedTypeForModel(singleKey)) ~= nil)
+check('an unknown model is not a bed',
+      seats.bedTypeForModel('meshes/f/furn_chair_02.nif') == nil)
+check('and neither is a nil model', seats.bedTypeForModel(nil) == nil)
+
+-- resolveSeatPose is what picks the clip at sit time. A bed reaching it as a
+-- SEAT would play a sitting clip on a mattress.
+local kind, subType, group = P.resolveSeatPose(bedFurn)
+check('resolveSeatPose sees a pack bed as a bed',
+      kind == seats.TARGET_KIND.BED, tostring(kind))
+check('and hands back a sleep group', type(group) == 'string', tostring(group))
+check('matching the bed type', subType == double.bedType,
+      tostring(subType) .. ' vs ' .. tostring(double.bedType))
 
 print(fails == 0 and 'ALL PASS' or (fails .. ' FAILURES'))
 if fails > 0 then os.exit(1) end
